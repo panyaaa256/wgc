@@ -13,7 +13,7 @@ Minecraft Java Edition のワールド（Anvil 形式）から不要なチャン
 | P2 | チャンク NBT の要約 | [chunk-nbt.md](spec/chunk-nbt.md)、[versions.md](spec/versions.md) | region-format「圧縮方式」 |
 | P3 | ワールドの構成の認識 | [world-layout.md](spec/world-layout.md)、[versions.md](spec/versions.md) | region-format「ファイル名」 |
 | P4 | 計画 | [plan.md](spec/plan.md) | region-format「エラーの区分」、chunk-nbt「ChunkSummary」、world-layout「ディメンションマップ」「リージョン三つ組の列挙」「強制読み込みチャンク」「プレイヤーデータ」 |
-| P5 | InhabitedTime の信用の確認 | [trust.md](spec/trust.md)、[versions.md](spec/versions.md) | world-layout「level.dat」「プレイヤーデータ」「Paper の設定ファイル」、plan「Plan のモデル」 |
+| P5 | InhabitedTime の信用の確認 | [trust.md](spec/trust.md)、[versions.md](spec/versions.md) | world-layout「level.dat」「ゲームルール」「プレイヤーデータ」「Paper の設定ファイル」、plan「Plan のモデル」 |
 | P6 | 診断（scan） | [scan.md](spec/scan.md) | plan「Plan のモデル」、trust「結果のモデル」、cli「固定の注意文」 |
 | P7 | 出力と検証 | [output.md](spec/output.md) | plan「Plan のモデル」、region-format「書き込み」、world-layout「ディメンションマップ」、trust「判定の使い方」、cli「停止と `--force`」 |
 | P8 | CLI | [cli.md](spec/cli.md) | scan「ターミナル出力」、output「`wgc verify`」「書き戻しの手順」、trust「判定の使い方」 |
@@ -26,6 +26,7 @@ Minecraft Java Edition のワールド（Anvil 形式）から不要なチャン
 - チャンクの中身は再エンコードしない。残すチャンクは元のバイト列のまま書く。
 - 判定の結果は1つの Plan にまとめ、scan、見積もり、実行で共有する。
 - 出力は元のワールドと突き合わせて検証し、通った場合だけ完了とする。
+- ツールが出すメッセージは英語のみ。
 
 ## コマンド
 
@@ -68,25 +69,14 @@ P0 の完了条件: `cargo build`、`cargo test`、`wgc --help` が動く。
 - 合成したリージョンファイルを基本にする。実際のワールドの切り出しは `tests/fixtures/` に置き、作成したバージョンを書く。
 - チャンクの形式は、1.18 より前（`Level` あり）、1.18 以降、最新の3種類を用意する。
 
-## 要調査
+## 根拠
 
-実装の前に、実際のワールドかゲームのソースで確認し、該当する文書を更新する。
+保存形式とバージョンの値は、2026-11-09 時点の次の資料で確認した。
 
-| 事項 | 文書 |
-|---|---|
-| 強制読み込みチャンクの保存形式の変化 | world-layout「強制読み込みチャンク」 |
-| ゲームルールの保存形式の変化 | world-layout「level.dat」 |
-| 26.1 以降のプレイヤーデータの場所 | world-layout「プレイヤーデータ」 |
-| 26.1 以降の Paper の設定ファイルの場所 | world-layout「Paper の設定ファイル」 |
-| `session.lock` が OS のロックを使い始めたバージョン | versions |
-| Paper の旧バージョンの巨大チャンクの形式 | region-format「エラーの区分」 |
-| lz4-java のブロック形式 | region-format「LZ4」 |
-| PaperMC/Paper#12827 の修正状況と発生条件 | trust「T-2」 |
-| 26.1 の DataVersion、`DV_MAX_KNOWN` | versions |
-
-## 未決事項
-
-- メッセージの言語（日本語のみか、英語と日本語か）。
+- Minecraft 26.3 のサーバー jar（難読化なし）を逆コンパイルしたもの: `DataFixers`、各 `FileFix`、`TicketStorage`、`GameRuleRegistryFix`、`DirectoryLock`、`SerializableChunkData`、`RegionFileVersion`
+- 1.16 のスナップショットの公式マッピング（`DirectoryLock` の導入時期）
+- PaperMC/Paper（26.3、commit `b31b4b5`）と、Issue #12827
+- lz4-java の `LZ4BlockOutputStream`
 
 ## MVP に入れないもの
 

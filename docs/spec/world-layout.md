@@ -30,8 +30,8 @@
 
 | ID | 条件 | エラーメッセージ |
 |---|---|---|
-| W-1 | Bukkit（26.1 より前）と判定したが、`<base>/DIM-1` か `<base>/DIM1` がワールドのディレクトリで、`<base>_nether/DIM-1` も `<base>_the_end/DIM1` もそうでない | 「バニラのサーバーでは、ワールドフォルダを指定してください: `wgc gc /srv/mc/world`」（実行したコマンドのパスを `<root>/<base>` に置き換えて出す） |
-| W-2 | バニラと判定したが、ルートに `paper-world.yml` がある、またはルートの親に `bukkit.yml` か `spigot.yml` がある | 「Bukkit 系のサーバーでは、サーバーのルートを指定してください」 |
+| W-1 | Bukkit（26.1 より前）と判定したが、`<base>/DIM-1` か `<base>/DIM1` がワールドのディレクトリで、`<base>_nether/DIM-1` も `<base>_the_end/DIM1` もそうでない | `This looks like a vanilla server. Pass the world folder instead: wgc gc /srv/mc/world`（実行したコマンドのパスを `<root>/<base>` に置き換えて出す） |
+| W-2 | バニラと判定したが、ルートに `paper-world.yml` がある、またはルートの親に `bukkit.yml` か `spigot.yml` がある | `This looks like a world folder of a Bukkit-based server. Pass the server root folder instead.` |
 
 ## ディメンションマップ
 
@@ -50,7 +50,7 @@
 pub struct Dimension {
     pub id: String,
     pub dir: PathBuf,           // ディメンションフォルダ
-    pub world_folder: PathBuf,  // session.lock と paper-world.yml の場所
+    pub world_folder: PathBuf,  // session.lock の場所
 }
 ```
 
@@ -82,14 +82,31 @@ pub struct Dimension {
 | フィールド | 用途 |
 |---|---|
 | `Data.DataVersion`（Int） | ワールドのバージョン |
-| `Data.GameRules` | T-2。旧形式はキー `doMobSpawning`、値は String（`"true"`／`"false"`）。要調査: 最近のバージョンで名前・型・場所が変わった可能性 |
-| `Data.Player` | T-3（シングルプレイヤーのホスト） |
+| `Data.Player` | T-3。DataVersion < 4772 のシングルプレイヤーのホスト。4772 以降は `Data.singleplayer_uuid` に変わり、本体は他のプレイヤーと同じくプレイヤーデータの場所にある |
 
-Bukkit（26.1 より前）では、ゲームルールはワールドフォルダごとの `level.dat` から読む（T-2）。それ以外は `main_world_folder` のものを使う。
+## ゲームルール
+
+T-2 でモブのスポーンの設定を読む。キーがなければ既定値（有効）とする。
+
+| DataVersion | 場所 | キーと型 |
+|---|---|---|
+| < 4658 | `level.dat` の `Data.GameRules` | `doMobSpawning`、String（`"true"`／`"false"`） |
+| 4658 〜 4771 | `level.dat` の `Data.game_rules` | `minecraft:spawn_mobs`、Byte（0／1） |
+| ≥ 4772 | `main_world_folder/data/minecraft/game_rules.dat`（gzip NBT。ルートに `DataVersion` と `data`） | `data` の下の `minecraft:spawn_mobs`、Byte |
+
+Bukkit 系ではゲームルールがワールドごとにある。
+
+| レイアウト | 読む場所 |
+|---|---|
+| Bukkit（26.1 より前） | 各ワールドフォルダの `level.dat`（上の表の形式） |
+| Bukkit（26.1 以降） | 各ディメンションフォルダの `data/minecraft/game_rules.dat` |
 
 ## プレイヤーデータ
 
-場所: 26.1 より前は `main_world_folder/playerdata/`。26.1 以降は要調査。
+| DataVersion | 場所 |
+|---|---|
+| < 4772 | `main_world_folder/playerdata/` |
+| ≥ 4772 | `main_world_folder/players/data/` |
 
 | パターン | 意味 |
 |---|---|
@@ -99,11 +116,16 @@ Bukkit（26.1 より前）では、ゲームルールはワールドフォルダ
 
 ## 強制読み込みチャンク
 
-| バージョン | 場所と形式 |
-|---|---|
-| 1.14 〜（要調査: いつまでか） | `<ディメンションフォルダ>/data/chunks.dat`（gzip NBT）の `data.Forced`（LongArray。下位 32 ビットが x、上位 32 ビットが z） |
-| それ以降 | 要調査 |
+ファイルはどれも gzip NBT で、ルートに `DataVersion` と `data` がある。
 
+| DataVersion | ファイル | 内容 |
+|---|---|---|
+| < 4297 | `<ディメンションフォルダ>/data/chunks.dat` | `data.Forced`: LongArray |
+| 4297 〜 4771 | 同上 | `data.tickets`: Compound の List |
+| ≥ 4772 | `<ディメンションフォルダ>/data/minecraft/chunk_tickets.dat` | 同上 |
+
+- `data.tickets` の各要素は `type`（String）、`level`（Int）、`ticks_left`（Long）、`chunk_pos`。強制読み込みチャンクは `type` が `minecraft:forced` のもの（`minecraft:portal` などは無視する）。
+- `chunk_pos` と `Forced` の値は、IntArray なら `[x, z]`、Long なら下位 32 ビットが x、上位 32 ビットが z。形式はタグの型で判断する。
 - ファイルがなければ、強制読み込みチャンクはない。
 - 読めない、または知らないバージョンなら「確認できない」（P4 で `protection_unknown`）。
 
@@ -111,10 +133,9 @@ Bukkit（26.1 より前）では、ゲームルールはワールドフォルダ
 
 | ファイル | 場所 |
 |---|---|
-| ワールドごと | `<world_folder>/paper-world.yml` |
+| ワールドごと（Bukkit 26.1 より前） | `<world_folder>/paper-world.yml` |
+| ワールドごと（Bukkit 26.1 以降） | `<ディメンションフォルダ>/paper-world.yml` |
 | サーバー全体の既定値 | `<server_root>/config/paper-world-defaults.yml` |
-
-26.1 以降の場所は要調査。
 
 ## 受け入れ条件
 
@@ -122,4 +143,5 @@ Bukkit（26.1 より前）では、ゲームルールはワールドフォルダ
 - `level-name` が `../x`、空、`/abs` なら「指定なし」になる。
 - 同じ座標を指す2つの名前でエラーになる。W-1、W-2 が検出される。
 - Bukkit（26.1 より前）のデータパックのディメンションの ID が、中の `dimensions/<ns>/<name>` から決まる。
-- `chunks.dat` がなければ「なし」、壊れていれば「確認できない」になる。
+- 強制読み込みチャンクの3つの形式（`Forced`、`tickets` の Long、`tickets` の IntArray）を読め、`minecraft:forced` 以外のチケットを無視する。ファイルがなければ「なし」、壊れていれば「確認できない」になる。
+- ゲームルールの3つの形式で `spawn_mobs` を読め、キーがなければ有効として扱う。

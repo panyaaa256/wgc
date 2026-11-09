@@ -23,11 +23,12 @@
 
 ## ロック
 
-- Java の `FileChannel.tryLock` と排他になる OS のロックを、待たずに試す。取れなければ「ワールドが使用中です。サーバー（ゲーム）を止めてから実行してください」で中止する。
+- Java の `FileChannel.tryLock` と排他になる OS のロックを、待たずに試す。取れなければ `The world is in use. Stop the server or game and try again.` で中止する。
 - Unix: `flock` は使わない（Linux では Java の `fcntl` ロックと干渉しない。`File::try_lock`、`fs2`、`fs4` も `flock`）。Linux は OFD ロック（`F_OFD_SETLK`、`F_WRLCK`、ファイル全体）、それ以外の Unix は `F_SETLK`。
 - POSIX ロックは、同じプロセスで同じファイルの別の記述子を閉じると解放される。ロック中は `session.lock` を他の目的で開かない（`stat` はよい）。
 - Windows: `LockFileEx`（`LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY`）。
 - 読み書き・作成なし・切り詰めなしで開く。書き込みで開けなければ、サーバーと同じユーザーで実行するよう案内して中止する。
+- ゲームは起動時に `session.lock` を作成・書き込み・fsync してからロックするので、起動すると更新日時が必ず変わる（`wgc verify` はこれを使う）。
 
 | 状況 | 扱い |
 |---|---|
@@ -129,18 +130,18 @@
 
 読み取りのみ。
 
-1. `complete.json` がなければ失敗（「出力が完了していません」）。
+1. `complete.json` がなければ失敗（`The output is incomplete.`）。
 2. `source-state.json` の `source` が `<path>` と違えば失敗。
-3. 各ワールドフォルダの下を `stat` し、記録と比べる。追加・削除・サイズか更新日時の変更があれば、変わったファイルを一覧にして失敗（「処理した後に、元のワールドが変更されています。書き戻すと、その間の変更が失われます」）。
-4. `session.lock` のロックを試し、取れなければ失敗（「ワールドが使用中です」）。取れたらすぐ解放する。
-5. 「書き戻せます」と表示し、書き戻しの手順を表示する。`forced` が空でなければ、「`--force` で作った出力です（無視した確認: …）」と目立つように表示する。
+3. 各ワールドフォルダの下を `stat` し、記録と比べる。追加・削除・サイズか更新日時の変更があれば、変わったファイルを一覧にして失敗（`The world has changed since the output was created. Swapping it in would lose those changes.`）。
+4. `session.lock` のロックを試し、取れなければ失敗（`The world is in use.`）。取れたらすぐ解放する。
+5. `Ready to swap.` と表示し、書き戻しの手順を表示する。`forced` が空でなければ、`This output was created with --force (ignored checks: ...)` と目立つように表示する。
 
 ## 書き戻しの手順
 
 `gc --out` の完了時と `wgc verify` の成功時に、実際のパスで表示する。
 
 1. ゲーム（サーバー）を止める。
-2. `wgc verify <path> <out>` で「書き戻せます」と出ることを確かめる。
+2. `wgc verify <path> <out>` で `Ready to swap.` と出ることを確かめる。
 3. `<path>` を `<path>.wgc-bak` に名前を変える。
 4. `<out>` を `<path>` に移す。
 5. 起動して確かめる。

@@ -16,7 +16,7 @@ GC は「InhabitedTime が 0 なら、スペクテイター以外のプレイヤ
 
 `fixed-chunk-inhabited-time` が 0 以上だと、全チャンクの値が固定される。
 
-各ワールドフォルダの `paper-world.yml` と `<server_root>/config/paper-world-defaults.yml` の `chunks.fixed-chunk-inhabited-time` を読む（YAML ライブラリを使う）。
+ワールドごとの `paper-world.yml` と既定値の `paper-world-defaults.yml`（場所は world-layout「Paper の設定ファイル」）の `chunks.fixed-chunk-inhabited-time` を読む（YAML ライブラリを使う）。
 
 | ワールドごとの値 | 判定 |
 |---|---|
@@ -28,15 +28,13 @@ YAML を読めない、型が想定外なら「確認できない」。不合格
 
 ## T-2: モブのスポーン
 
-Paper 1.21.5 以降では、モブのスポーンが無効だと InhabitedTime が加算されない（PaperMC/Paper#12827）。
+Paper 1.21.5 以降では、ゲームルール `spawn_mobs`（旧 `doMobSpawning`）が無効だと InhabitedTime が加算されない（PaperMC/Paper#12827。2026-11-09 時点で未修正で、Paper 26.3 のコードにも残っている）。
 
-各ワールドフォルダの `level.dat` のゲームルールで、モブのスポーンが無効なら不合格。形式を読めない、または知らないバージョンなら「確認できない」。Spigot など Paper 以外ではこの不具合は起きないが、ファイルからは区別できないので `--force` で続行する。
-
-要調査: 修正されたバージョン（分かれば対象を絞る）と、発生条件が「スポーンするカテゴリーが空」（`spawn-limits` がすべて 0 など）でもあるか。
+各ワールドのゲームルール（world-layout「ゲームルール」）で、モブのスポーンが無効なら不合格。形式を読めない、または知らないバージョンなら「確認できない」。Spigot など Paper 以外ではこの不具合は起きないが、ファイルからは区別できないので `--force` で続行する。
 
 ## T-3: プレイヤーの位置
 
-対象: プレイヤーデータの場所の `<uuid>.dat` と、`level.dat` の `Data.Player`。
+対象: プレイヤーデータの場所の `<uuid>.dat` と、`level.dat` の `Data.Player`（DataVersion < 4772 のときだけある）。
 
 | フィールド | 型 | 内容 |
 |---|---|---|

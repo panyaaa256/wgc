@@ -50,17 +50,17 @@ wgc verify <path> <out>
 
 | ID | 場面 | 文 |
 |---|---|---|
-| `pregenerated_chunks` | `scan`、`gc` | 事前生成したチャンクも削除対象になります。事前生成したワールドでは、その効果がなくなります。 |
-| `boundary_general` | 削除するチャンクがあるとき | 削除したチャンクは、次に読み込まれたときに、現在のバージョンとワールド生成の設定で再生成されます。古い地形との境目では、段差や途切れた地形が出ることがあります。 |
-| `no_trash` | `gc --out` の完了時 | 元のワールドは変更していません。ゴミ箱はないため、元のワールドを削除すると元に戻せません。確認できるまで残してください。 |
-| `run_official_optimize` | 古い形式のチャンクがあるとき | 古い形式のチャンクが N 個あります。公式の「ワールドの最適化」（`--forceUpgrade`）を勧めます。 |
+| `pregenerated_chunks` | `scan`、`gc` | Pre-generated chunks are also deleted. On a pre-generated world, this undoes the pre-generation. |
+| `boundary_general` | 削除するチャンクがあるとき | Deleted chunks are regenerated with the current version and world generation settings when they are next loaded. Terrain may not line up where it meets older chunks. |
+| `no_trash` | `gc --out` の完了時 | The original world was not modified. There is no trash: once you delete the original world, it cannot be restored. Keep it until you have checked the new one. |
+| `run_official_optimize` | 古い形式のチャンクがあるとき | N chunks are in an older format. Consider running the game's Optimize World (`--forceUpgrade`). |
 
 ## 出力
 
 - 進捗は、端末のときだけ標準エラーに出す。
 - 警告とエラーは標準エラーに出す。
 - 停止したときは、理由と解決の方法（判定の信用に関する停止なら `--force`）を出す。
-- メッセージは1か所にまとめる（言語は未決。それまでは日本語）。
+- メッセージは英語のみ。1か所にまとめる。
 
 ## 受け入れ条件
 
