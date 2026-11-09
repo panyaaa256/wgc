@@ -81,7 +81,7 @@
   "lock": { "acquired": true },
   "trust": [
     { "id": "T1", "status": "pass" },
-    { "id": "T3", "status": "fail", "details": ["…"], "override_flag": "--allow-zero-at-player" }
+    { "id": "T3", "status": "fail", "details": ["…"] }
   ],
   "unknown_dimensions": [],
   "other_files": { "omitted": [{ "path": "world/playerdata/…-123.dat", "reason": "player_temp_file" }], "dat_old_without_dat": [] },
@@ -117,7 +117,7 @@
 端末向けの要約は、次の順に出す。各一覧は先頭の 10 件までにし、残りは件数だけを出す（すべて見るには `--json`）。
 
 1. レイアウト、ワールドの DataVersion、ロックの状態
-2. 信用の確認（不合格と「確認できない」を目立たせる。続行用のフラグも出す）
+2. 信用の確認（不合格と「確認できない」を目立たせる。あれば、`gc --out` はこのままでは中止し、`--force` で続行できることも出す）
 3. ディメンションごとの1行の要約: 容量、チャンク数、削除するチャンク数、出力後の容量
 4. 合計: 現在の容量、出力後の容量、減る量
 5. 整合性の問題（あれば）

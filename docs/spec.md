@@ -16,7 +16,7 @@
 | P4 | 計画（GC と clean の判定） | [spec/plan.md](spec/plan.md) | region-format.md「エラーの区分」、chunk-nbt.md「ChunkSummary」、world-layout.md「ディメンションマップ」「リージョン三つ組の列挙」「強制読み込みチャンク」「スポーン」「プレイヤーデータ」 |
 | P5 | InhabitedTime の信用の確認 | [spec/trust.md](spec/trust.md)、[spec/versions.md](spec/versions.md) | world-layout.md「level.dat」「プレイヤーデータ」「Paper の設定ファイル」、plan.md「Plan のモデル」 |
 | P6 | 診断（scan） | [spec/scan.md](spec/scan.md) | plan.md「Plan のモデル」、trust.md「結果のモデル」、cli.md「固定の注意文」 |
-| P7 | 出力の書き出しと検証 | [spec/output.md](spec/output.md) | plan.md「Plan のモデル」、region-format.md「書き込み（詰め直し）」、world-layout.md「ディメンションマップ」、trust.md「判定の使い方」 |
+| P7 | 出力の書き出しと検証 | [spec/output.md](spec/output.md) | plan.md「Plan のモデル」、region-format.md「書き込み（詰め直し）」、world-layout.md「ディメンションマップ」、trust.md「判定の使い方」、cli.md「停止と `--force`」 |
 | P8 | CLI | [spec/cli.md](spec/cli.md) | scan.md「ターミナル出力」、output.md「書き戻しの手順」「`wgc verify`」、trust.md「判定の使い方」 |
 
 各文書の冒頭に、その文書が前提とする他の文書の節を書いてある。
