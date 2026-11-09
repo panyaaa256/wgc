@@ -8,7 +8,7 @@
 
 ## 目的
 
-ワールドを読み取りだけで診断し、結果を端末向けの要約と JSON で出す。`scan` は、`gc` の Plan（モード `Gc`、全ディメンション）と、信用の確認の結果から、レポートを組み立てる。レポートのために独自の判定はしない。
+ワールドを読み取りだけで診断し、結果を端末向けの要約と JSON で出す。`scan` は、`gc` の Plan（`--dim` の指定なし、つまり全ディメンションが対象）と、信用の確認の結果から、レポートを組み立てる。レポートのために独自の判定はしない。
 
 ## 起動中のワールド
 
@@ -28,7 +28,6 @@
 | ワールドの DataVersion | `level.dat` の値 |
 | ロック | 取れたか |
 | 信用の確認 | `TrustReport` の全項目 |
-| 不明なディメンション | world-layout.md の W-3 |
 | その他のファイル | 出力しないもの（プレイヤーデータの一時ファイル）の一覧。`.dat_old` の異常 |
 | 注意 | 固定の注意文（[cli.md](cli.md) の「固定の注意文」）の ID |
 
@@ -42,11 +41,9 @@
 | InhabitedTime の分布 | 下の区分ごとのチャンク数 |
 | GC の見積もり | 削除するチャンク数、保護したチャンク数（理由ごと）、種別ごとの出力後のサイズ |
 | 空になるリージョンファイル | `NoEntriesLeft` になるファイルの一覧 |
-| 断片化 | 断片化の合計 |
 | 整合性 | 構造エラー（ファイル、ID、内容）、内容エラー（チャンクの位置、種類）、そのままコピーになる三つ組 |
 | 本体のないデータ | `Orphan` で削除する entities／poi のエントリの数（種別ごと） |
 | サイズ 0 のファイル | 一覧 |
-| 報告のみ | 位置の不一致、型の違い、参照されていない外部ファイル |
 | 古い地形との境界 | まとまりごとのチャンク数と範囲 |
 
 ### InhabitedTime の区分
@@ -83,7 +80,6 @@
     { "id": "T1", "status": "pass" },
     { "id": "T3", "status": "fail", "details": ["…"] }
   ],
-  "unknown_dimensions": [],
   "other_files": { "omitted": [{ "path": "world/playerdata/…-123.dat", "reason": "player_temp_file" }], "dat_old_without_dat": [] },
   "notices": ["pregenerated_chunks", "boundary_general"],
   "dimensions": [
@@ -95,15 +91,13 @@
       "inhabited_time": { "zero": 0, "missing": 0, "unreadable": 0, "lt_1s": 0, "lt_10s": 0, "lt_1m": 0, "lt_10m": 0, "lt_1h": 0, "lt_10h": 0, "ge_10h": 0 },
       "gc": {
         "delete": 0,
-        "protected": { "forceload": 0, "spawn": 0, "structure_ref": 0 },
+        "protected": { "forceload": 0, "structure_ref": 0 },
         "size_after": { "region": 0, "entities": 0, "poi": 0 },
         "emptied_files": []
       },
-      "fragmentation": 0,
       "integrity": { "structural": [], "content": [], "verbatim_triples": [] },
       "orphans": { "entities": 0, "poi": 0 },
       "empty_files": [],
-      "reports": { "pos_mismatch": [], "type_mismatch": [], "unreferenced_external": [] },
       "boundary_warnings": [{ "chunks": 0, "min": [0, 0], "max": [0, 0] }]
     }
   ]
@@ -126,7 +120,7 @@
 8. 古い地形との境界（あれば）
 9. 固定の注意文
 
-`gc`／`clean` の見積もり（`--out` なし）でも、同じ形式で、1〜4、5、6、8、9 を出す。
+`gc` の見積もり（`--out` なし）でも、同じ形式で、1〜6、8、9 を出す。
 
 ## 受け入れ条件
 

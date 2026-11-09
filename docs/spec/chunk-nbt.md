@@ -28,8 +28,6 @@
 |---|---|---|---|
 | DataVersion | Int | ルート直下 | ルート直下（1.9 より前はない） |
 | InhabitedTime | Long | ルート直下 | `Level` の下 |
-| Status | String | ルート直下 | `Level` の下 |
-| xPos、zPos | Int | ルート直下 | `Level` の下 |
 | blending_data | Compound | ルート直下（あるかどうかだけ） | — |
 | 構造物の参照 | Compound（値は LongArray） | `structures.References` | `Level.Structures.References` |
 
@@ -44,7 +42,7 @@
 ### 型が違う場合
 
 - タグはあるが、型が想定と違う場合（例: InhabitedTime が Int）は、**「タグなし」と同じに扱う**。InhabitedTime の場合は「判断できない」になり、チャンクは残る。
-- 型の違いはエラーにしない。報告用に、`type_mismatch` として記録する。
+- 型の違いはエラーにせず、報告もしない。
 
 ### 構造物の参照
 
@@ -61,16 +59,14 @@
 pub struct ChunkSummary {
     pub data_version: Option<i32>,
     pub inhabited_time: Option<i64>,   // None = タグなし、または型の違い
-    pub status: Option<String>,        // 報告用。判定には使わない
-    pub nbt_pos: Option<(i32, i32)>,   // xPos、zPos。整合性の報告にだけ使う
     pub has_blending_data: bool,
     pub structure_refs: Vec<(i32, i32)>, // 重複を除き、昇順に並べる
-    pub type_mismatches: Vec<&'static str>,
 }
 ```
 
-- `nbt_pos` がファイル内の位置と一致しない場合（リージョンファイルをリネームしてコピーしたワールドなど）でも、チャンクの識別はファイル内の位置で行う。不一致は P6 で報告する。
-- `Status` は判定に使わない。バージョンの変換で書き換わることがあるため（1.13〜1.14 の変換で完成済みのチャンクに `spawn` が付く、1.18 の変換で `structure_starts` などに戻される）。
+- `Status`、`xPos`、`zPos` は読まない。
+  - `Status` は判定に使わない。バージョンの変換で書き換わることがあるため（1.13〜1.14 の変換で完成済みのチャンクに `spawn` が付く、1.18 の変換で `structure_starts` などに戻される）。
+  - チャンクの識別は、NBT の `xPos`／`zPos` ではなく、ファイル内の位置で行う（リージョンファイルをリネームしてコピーしたワールドでは、両者が一致しないことがある）。
 
 ## entities／poi
 
@@ -84,7 +80,7 @@ MVP では、`entities/` と `poi/` のチャンクは展開しない。構造�
 ## 受け入れ条件
 
 - `Level` を持つ形式（DataVersion < 2844、および DataVersion なし）と、ルート直下の形式の両方で、全フィールドを読める。
-- InhabitedTime がない場合と、型が違う場合に、`inhabited_time` が `None` になり、後者では `type_mismatches` に記録される。
+- InhabitedTime がない場合と、型が違う場合に、`inhabited_time` が `None` になる。
 - `References` の Long から、負の座標を含む位置を正しく復元できる（例: `x = -1, z = 2`）。
 - 読めない NBT で `NbtError` を返し、パニックしない（ファズテストを1つ用意する）。
 - 読み飛ばすフィールドに大きなデータ（セクションなど）がある実際のチャンクで、正しく要約できる。
