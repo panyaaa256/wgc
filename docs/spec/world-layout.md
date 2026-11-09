@@ -1,164 +1,125 @@
 # ワールドの構成の認識（P3）
 
-> 前提: [region-format.md](region-format.md) の「ファイル名」、[versions.md](versions.md)。
-> 実装先: `wgc-core` の `layout` モジュール（ファイルを読む部分）と `nbt` モジュール（`level.dat` などの NBT を読む部分）。
-> 参考: TMCJapan/sekai の `crates/world/src/tree/hostworld/`（`detect.rs`、`bukkit.rs`、`vanilla.rs`）と、そのドキュメント `book/ja/src/world-layouts.md`。レイアウトの判定は sekai と同じ結果になるようにする。
+実装先: `core::layout`（NBT を読む部分は `core::nbt`）。レイアウトの判定は TMCJapan/sekai（`crates/world/src/tree/hostworld/`）と同じ結果にする。
 
-## 指定するパス
+## 判定
 
-| サーバーの種類 | 指定するパス |
-|---|---|
-| バニラ（シングルプレイヤー、バニラのサーバー） | ワールドフォルダ |
-| Bukkit 系（Bukkit、Spigot、Paper、Purpur） | サーバーのルートフォルダ（`server.properties` があるフォルダ） |
+### ワールドのディレクトリ
 
-## レイアウトの判定
-
-### ワールドのディレクトリかどうか
-
-ディレクトリ `d` について、`d/region/`、`d/entities/`、`d/poi/` のどれかに、ファイル名として解釈できる `r.<x>.<z>.mca` が1つ以上あれば、`d` は「ワールドのディレクトリ」である。
-
-- `d` が存在しない場合は「ワールドのディレクトリではない」。
-- `d` やその種別のフォルダを読めない場合（権限など）は、エラーにする。黙って「ではない」と答えない。
+`d/region/`、`d/entities/`、`d/poi/` のどれかに、解釈できる `r.<x>.<z>.mca` が1つ以上あれば、`d` はワールドのディレクトリ。`d` がなければ「ではない」。読めなければエラー。
 
 ### level-name
 
-ルートに `server.properties` があれば読み、コメントでない最初の `level-name=` の行の値（前後の空白を除く）を使う。次の場合は「指定なし」とする。
+ルートの `server.properties` の、コメントでない最初の `level-name=` の値（前後の空白を除く）。ファイルがない・読めない、値が空・`.`・`..`・`/` か `\` を含む場合は「指定なし」。
 
-- ファイルがない、読めない
-- 値が空、`.`、`..`、または `/` か `\` を含む
+### Bukkit の候補 `<base>`
 
-### Bukkit の候補
+- `level-name` があれば、それだけ。
+- なければ、ルート直下のディレクトリのうち、`dimensions/` を持つもの、または `<名前>_nether`／`<名前>_the_end` の兄弟を持つもの（`dimensions`、`DIM-1`、`DIM1` を除く）。`world` を先頭に、残りは辞書順。
 
-- `level-name` があれば、それだけを候補 `<base>` にする。
-- なければ、ルートの直下のディレクトリのうち、`dimensions/` を持つもの、または `<名前>_nether`／`<名前>_the_end` の兄弟を持つものを候補にする（`dimensions`、`DIM-1`、`DIM1` 自体は除く）。`world` を先頭に、残りは辞書順に並べる。
+### 順序（最初に一致したもの）
 
-### 判定の順序
-
-最初に一致したものを採用する。
-
-1. 各 Bukkit 候補 `<base>` について、順に:
+1. 各 `<base>` について:
    1. `<base>/dimensions/minecraft/{overworld,the_nether,the_end}` のどれかがワールドのディレクトリ → **Bukkit（26.1 以降）**
-   2. `<base>/`、`<base>_nether/DIM-1/`、`<base>_the_end/DIM1/` のどれかがワールドのディレクトリ → **Bukkit（26.1 より前）**
-2. `dimensions/minecraft/{overworld,the_nether,the_end}` のどれかがワールドのディレクトリ → **バニラ（26.1 以降）**
-3. ルート、`DIM-1/`、`DIM1/` のどれかがワールドのディレクトリ → **バニラ（26.1 より前）**
-4. どれにも一致しない → エラー「ワールドが見つからない」
+   2. `<base>/`、`<base>_nether/DIM-1/`、`<base>_the_end/DIM1/` のどれか → **Bukkit（26.1 より前）**
+2. `dimensions/minecraft/{overworld,the_nether,the_end}` のどれか → **バニラ（26.1 以降）**
+3. ルート、`DIM-1/`、`DIM1/` のどれか → **バニラ（26.1 より前）**
+4. どれでもない → エラー
 
-### wgc で追加する確認
+### 指定の誤りの検出
 
-| ID | 確認 | 結果 |
+| ID | 条件 | エラーメッセージ |
 |---|---|---|
-| W-1 | Bukkit（26.1 より前）と判定したが、`<base>/DIM-1` か `<base>/DIM1` がワールドのディレクトリで、`<base>_nether/DIM-1` と `<base>_the_end/DIM1` はワールドのディレクトリではない | バニラのサーバーのルートを指定したとみなし、エラーにする。メッセージには、指定すべきパス（`<root>/<base>`）をそのまま出す。例:「バニラのサーバーでは、ワールドフォルダを指定してください: `wgc gc /srv/mc/world`」（実行したコマンドのパスの部分だけを置き換える） |
-| W-2 | バニラと判定したが、ルートに `paper-world.yml` がある、またはルートの親に `bukkit.yml` か `spigot.yml` がある | Bukkit 系のワールドフォルダを直接指定したとみなし、エラー「Bukkit 系のサーバーでは、サーバーのルートを指定してください」 |
-
-ディメンションマップに含まれない場所にあるリージョンファイル（26.1 の `dimensions/` の隣に残った旧形式のフォルダ、ワールドフォルダの中に置かれたバックアップなど）は探さない。P7 で、他のファイルと同じくそのままコピーされる。
+| W-1 | Bukkit（26.1 より前）と判定したが、`<base>/DIM-1` か `<base>/DIM1` がワールドのディレクトリで、`<base>_nether/DIM-1` も `<base>_the_end/DIM1` もそうでない | 「バニラのサーバーでは、ワールドフォルダを指定してください: `wgc gc /srv/mc/world`」（実行したコマンドのパスを `<root>/<base>` に置き換えて出す） |
+| W-2 | バニラと判定したが、ルートに `paper-world.yml` がある、またはルートの親に `bukkit.yml` か `spigot.yml` がある | 「Bukkit 系のサーバーでは、サーバーのルートを指定してください」 |
 
 ## ディメンションマップ
 
-レイアウトが決まったら、ディメンションごとに1つのディメンションフォルダを決める。
-
 | レイアウト | ディメンションフォルダ |
 |---|---|
-| Bukkit（26.1 以降） | `<base>/dimensions/` の下の、すべての `<ns>/<name>` |
-| Bukkit（26.1 より前） | `<base>/`（オーバーワールド）、`<base>_nether/DIM-1/`、`<base>_the_end/DIM1/`。加えて、兄弟のフォルダ `<base>_<何か>/`（`_nether`、`_the_end` を除く）の中の `dimensions/` の下の、すべての `<ns>/<name>` |
-| バニラ（26.1 以降） | `dimensions/` の下の、すべての `<ns>/<name>` |
-| バニラ（26.1 より前） | ルート（オーバーワールド）、`DIM-1/`、`DIM1/`。加えて、`dimensions/` の下の、すべての `<ns>/<name>`（あれば） |
+| Bukkit（26.1 以降） | `<base>/dimensions/<ns>/<name>` のすべて |
+| Bukkit（26.1 より前） | `<base>/`、`<base>_nether/DIM-1/`、`<base>_the_end/DIM1/`、および兄弟 `<base>_<何か>/`（`_nether`、`_the_end` 以外）の中の `dimensions/<ns>/<name>` のすべて |
+| バニラ（26.1 以降） | `dimensions/<ns>/<name>` のすべて |
+| バニラ（26.1 より前） | ルート、`DIM-1/`、`DIM1/`、および `dimensions/<ns>/<name>`（あれば） |
 
-- Bukkit の兄弟のフォルダ名は、`<ns>` と `<name>` の両方に `_` を含みうるので曖昧である。ディメンションの ID は、フォルダ名ではなく、中の `dimensions/<ns>/<name>` から決める。
-- ID は `<ns>:<name>`。旧レイアウトの3つは、`minecraft:overworld`、`minecraft:the_nether`、`minecraft:the_end` とする。
-- シンボリックリンクは、ゲームと同じく辿る。
-
-各ディメンションについて、次の情報を持つ。
+- ID は `<ns>:<name>`。旧レイアウトの3つは `minecraft:overworld`、`minecraft:the_nether`、`minecraft:the_end`。Bukkit の兄弟フォルダの名前からは ID を決めない。
+- シンボリックリンクは辿る。
+- マップにない場所のリージョンファイルは探さない（P7 でそのままコピーされる）。
 
 ```rust
 pub struct Dimension {
-    pub id: String,              // "minecraft:the_nether" など
-    pub dir: PathBuf,            // ディメンションフォルダ
-    pub world_folder: PathBuf,   // このディメンションが属するワールドフォルダ
+    pub id: String,
+    pub dir: PathBuf,           // ディメンションフォルダ
+    pub world_folder: PathBuf,  // session.lock と paper-world.yml の場所
 }
 ```
-
-`world_folder` は、`session.lock` と `paper-world.yml` を探す場所である。
 
 | レイアウト | `world_folder` |
 |---|---|
 | バニラ | ルート |
 | Bukkit（26.1 以降） | `<base>/` |
-| Bukkit（26.1 より前） | オーバーワールドは `<base>/`、ネザーは `<base>_nether/`、エンドは `<base>_the_end/`、データパックのディメンションはその兄弟のフォルダ |
+| Bukkit（26.1 より前） | そのディメンションを含む `<base>`、`<base>_nether`、`<base>_the_end`、または兄弟のフォルダ |
 
-ワールド全体として、次の情報も持つ。
+ワールド全体として次も持つ。
 
-- `main_world_folder`: `level.dat` とプレイヤーデータを読む場所。バニラはルート、Bukkit は `<base>/`。
-- `world_folders`: すべてのワールドフォルダの一覧。ロックと出力の単位になる（P7）。
+- `main_world_folder`: `level.dat` とプレイヤーデータの場所。バニラはルート、Bukkit は `<base>/`。
+- `world_folders`: すべてのワールドフォルダ。ロックと出力の単位。
 - `server_root`: Bukkit のときだけ、ルート。
 
 ## リージョン三つ組の列挙
 
-各ディメンションについて:
+各ディメンションで:
 
-1. `region/`、`entities/`、`poi/` のそれぞれのファイルを列挙し、ファイル名から座標を得る。
-2. 同じ種別のフォルダに、同じ座標を指す2つの名前（`r.0.0.mca` と `r.00.00.mca`）があれば、エラーにする。
-3. 3種類の座標の和集合を、リージョン三つ組の一覧にする（座標の昇順）。各三つ組は、種別ごとに「ファイルのパス、またはなし」を持つ。サイズ 0 のファイルも含める。
-4. 各種別のフォルダの `c.<cx>.<cz>.mcc` を列挙し、三つ組に渡す。
+1. `region/`、`entities/`、`poi/` のファイルを列挙し、名前から座標を得る。
+2. 同じ種別のフォルダに同じ座標を指す2つの名前（`r.0.0.mca` と `r.00.00.mca`）があれば、エラー。
+3. 3種別の座標の和集合を、座標の昇順で三つ組にする。サイズ 0 のファイルも含める。
+4. 各種別のフォルダの `.mcc` も三つ組に渡す。
 
 ## level.dat
 
-`main_world_folder/level.dat`。gzip で圧縮された NBT。
+`main_world_folder/level.dat`（gzip NBT）。ない・読めない場合はエラー。
 
-| フィールド | 型 | 用途 |
-|---|---|---|
-| `Data.DataVersion` | Int | ワールドの現在のバージョン |
-| `Data.GameRules` | Compound | モブのスポーンの設定（P5）。旧形式では値が String（`"true"`／`"false"`）で、キーは `doMobSpawning`。**要調査: 最近のバージョンで、名前（名前空間つきの ID など）、型、保存場所が変わった可能性がある** |
-| `Data.Player` | Compound | シングルプレイヤーのワールドのプレイヤー（P5） |
+| フィールド | 用途 |
+|---|---|
+| `Data.DataVersion`（Int） | ワールドのバージョン |
+| `Data.GameRules` | T-2。旧形式はキー `doMobSpawning`、値は String（`"true"`／`"false"`）。要調査: 最近のバージョンで名前・型・場所が変わった可能性 |
+| `Data.Player` | T-3（シングルプレイヤーのホスト） |
 
-- Bukkit（26.1 より前）では各ワールドフォルダに `level.dat` があるが、`main_world_folder` のものを使う。
-- `level.dat` がない、または読めない場合は、エラーにする。
+Bukkit（26.1 より前）では、ゲームルールはワールドフォルダごとの `level.dat` から読む（T-2）。それ以外は `main_world_folder` のものを使う。
 
 ## プレイヤーデータ
 
-| レイアウト | 場所 |
-|---|---|
-| 26.1 より前 | `main_world_folder/playerdata/` |
-| 26.1 以降 | 要調査（`players/` の下に移った可能性がある） |
-
-ファイルの種類:
+場所: 26.1 より前は `main_world_folder/playerdata/`。26.1 以降は要調査。
 
 | パターン | 意味 |
 |---|---|
-| `<uuid>.dat` | プレイヤーデータ本体。gzip で圧縮された NBT |
-| `<uuid>.dat_old` | ゲーム自身の1世代前の予備 |
+| `<uuid>.dat` | 本体（gzip NBT） |
+| `<uuid>.dat_old` | ゲームの予備 |
 | `^[0-9a-f-]{36}-\d+\.dat$` | 保存の途中で残った一時ファイル |
-
-シングルプレイヤーのワールドでは、ホストのプレイヤーは `level.dat` の `Data.Player` にある。
-
-読むフィールドは [trust.md](trust.md) の「プレイヤーの位置」に書いてある。
 
 ## 強制読み込みチャンク
 
 | バージョン | 場所と形式 |
 |---|---|
-| 1.14 〜（要調査: いつまでか） | `<ディメンションフォルダ>/data/chunks.dat`。gzip で圧縮された NBT。`data.Forced` が LongArray で、各 Long はチャンクの位置（下位 32 ビットが x、上位 32 ビットが z） |
-| それ以降 | 要調査（1.21.5 前後で、チケットの保存として別のファイルに移った可能性がある） |
+| 1.14 〜（要調査: いつまでか） | `<ディメンションフォルダ>/data/chunks.dat`（gzip NBT）の `data.Forced`（LongArray。下位 32 ビットが x、上位 32 ビットが z） |
+| それ以降 | 要調査 |
 
-- ファイルがなければ、そのディメンションには強制読み込みチャンクがない。
-- ファイルはあるが読めない場合、またはツールが知らないバージョンの場合は、「確認できない」とする。P5 はこれを [trust.md](trust.md) の「確認できない場合」として扱う（強制読み込みチャンクを保護できないため）。
-
-公開する関数の例: `forced_chunks(dim) -> Result<Known<BTreeSet<(i32, i32)>>, LayoutError>`。`Known` は「値」か「確認できない（理由）」のどちらか。
+- ファイルがなければ、強制読み込みチャンクはない。
+- 読めない、または知らないバージョンなら「確認できない」（P4 で `protection_unknown`）。
 
 ## Paper の設定ファイル
 
 | ファイル | 場所 |
 |---|---|
-| ワールドごとの設定 | `<world_folder>/paper-world.yml` |
+| ワールドごと | `<world_folder>/paper-world.yml` |
 | サーバー全体の既定値 | `<server_root>/config/paper-world-defaults.yml` |
 
-- 要調査: 26.1 以降の Paper での場所。
-- 読むキーと判定は [trust.md](trust.md) の「Paper の設定」に書いてある。
+26.1 以降の場所は要調査。
 
 ## 受け入れ条件
 
-- 4種類のレイアウトの合成したフォルダで、sekai と同じ判定になる。
-- `level-name` が `../x`、空、`/abs` の場合に、「指定なし」として扱われる。
-- 同じ座標を指す2つの名前のリージョンファイルで、エラーになる。
-- W-1、W-2 のそれぞれが検出される。
-- Bukkit（26.1 より前）の構成で、データパックのディメンションの ID が、兄弟のフォルダ名ではなく中の `dimensions/<ns>/<name>` から決まる。
-- `chunks.dat` がない場合に「なし」、壊れている場合に「確認できない」になる。
+- 4種類のレイアウトで sekai と同じ判定になる。
+- `level-name` が `../x`、空、`/abs` なら「指定なし」になる。
+- 同じ座標を指す2つの名前でエラーになる。W-1、W-2 が検出される。
+- Bukkit（26.1 より前）のデータパックのディメンションの ID が、中の `dimensions/<ns>/<name>` から決まる。
+- `chunks.dat` がなければ「なし」、壊れていれば「確認できない」になる。
