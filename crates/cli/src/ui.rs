@@ -60,6 +60,16 @@ impl Style {
     pub fn green(self, t: &str) -> String {
         self.paint("32", t)
     }
+    pub fn bold_green(self, t: &str) -> String {
+        self.paint("1;32", t)
+    }
+    pub fn cyan(self, t: &str) -> String {
+        self.paint("36", t)
+    }
+    /// For secondary text that should step back from the rest.
+    pub fn dim(self, t: &str) -> String {
+        self.paint("2", t)
+    }
 }
 
 const PROGRESS_TEMPLATE: &str = "{prefix:<9} [{bar:20}] {pos}/{len}  ETA {eta}";
@@ -328,35 +338,51 @@ fn wide_table(
             *w = (*w).max(text_width(cell));
         }
     }
-    let columns = |cells: &mut dyn Iterator<Item = &str>| -> String {
-        cells
-            .zip(widths)
-            .map(|(cell, w)| format!("  {cell:>w$}"))
-            .collect()
+    // Cells are padded before they are painted, so color codes never count towards the width.
+    // Returns the cells without and with color.
+    let columns = |cells: &mut dyn Iterator<Item = &str>| -> (String, String) {
+        cells.zip(widths).fold(
+            (String::new(), String::new()),
+            |(mut plain, mut painted), (cell, w)| {
+                let padded = format!("{cell:>w$}");
+                plain.push_str("  ");
+                plain.push_str(&padded);
+                painted.push_str("  ");
+                painted.push_str(&if cell == "0" {
+                    style.dim(&padded)
+                } else {
+                    padded
+                });
+                (plain, painted)
+            },
+        )
     };
 
+    let (header_columns, _) = columns(&mut WIDE_COLUMNS.into_iter());
     let header = format!(
-        "{DIMENSIONS_HEADER:<w$}{}",
-        columns(&mut WIDE_COLUMNS.into_iter()),
+        "{DIMENSIONS_HEADER:<w$}{header_columns}",
         w = label_width + 2
     );
     let mut width = text_width(&header);
     let mut lines = vec![style.bold(&header)];
     for (label, cells) in &body {
         let label = format!("{label:<label_width$}");
-        let mut rest = columns(&mut cells.iter().map(String::as_str));
+        let (mut plain, mut painted) = columns(&mut cells.iter().map(String::as_str));
         let is_total = lines.len() == body.len();
         if is_total {
-            rest.push_str(&format!(
-                "  (saves {})",
-                bytes(total.before.saturating_sub(total.after))
-            ));
+            let saves = saves(total);
+            plain.push_str(&format!("  ({saves})"));
+            painted.push_str(&format!("  ({})", style.bold_green(&saves)));
         }
-        width = width.max(2 + text_width(&label) + text_width(&rest));
+        width = width.max(2 + text_width(&label) + text_width(&plain));
         let label = if is_total { style.bold(&label) } else { label };
-        lines.push(format!("  {label}{rest}"));
+        lines.push(format!("  {label}{painted}"));
     }
     (width, lines)
+}
+
+fn saves(total: &DimensionRow<'_>) -> String {
+    format!("saves {}", bytes(total.before.saturating_sub(total.after)))
 }
 
 fn narrow_table(
@@ -385,11 +411,11 @@ fn narrow_table(
     }
     writeln!(
         out,
-        "  {} {:>10}  -> {} (saves {})",
+        "  {} {:>10}  -> {} ({})",
         style.bold(&format!("{:<w$}", total.label)),
         bytes(total.before),
         bytes(total.after),
-        bytes(total.before.saturating_sub(total.after))
+        style.bold_green(&saves(total))
     )
 }
 
@@ -408,7 +434,7 @@ pub fn summary(
         out,
         "{} {} ({}), data version {}",
         style.bold("World:"),
-        root.display(),
+        style.cyan(&root.display().to_string()),
         r.layout.kind,
         r.world_data_version
             .map_or("unknown".to_owned(), |v| v.to_string())
@@ -438,19 +464,20 @@ pub fn summary(
                 style.yellow("UNKNOWN")
             }
         };
-        writeln!(
-            out,
-            "  {} {:<36} {status}",
-            item.id,
-            messages::check_name(item.id)
-        )?;
+        let row = format!("{} {:<36} {status}", item.id, messages::check_name(item.id));
+        let row = if item.status == TrustStatus::NotApplicable {
+            style.dim(&row)
+        } else {
+            row
+        };
+        writeln!(out, "  {row}")?;
         if format.verbose {
             list(out, &item.details, messages::detail)?;
         } else {
             details_hidden |= !item.details.is_empty();
         }
         if let Some(reason) = &item.reason {
-            writeln!(out, "    {}", messages::reason(reason))?;
+            writeln!(out, "    {}", style.dim(&messages::reason(reason)))?;
         }
     }
     if !stopping.is_empty() && kind != SummaryKind::Output {
@@ -483,7 +510,7 @@ pub fn summary(
         }
     }
     if !format.verbose && (details_hidden || total.counts.any() || temp_files > 0) {
-        writeln!(out, "{}", messages::VERBOSE_HINT)?;
+        writeln!(out, "{}", style.dim(messages::VERBOSE_HINT))?;
     }
 
     if format.verbose {
