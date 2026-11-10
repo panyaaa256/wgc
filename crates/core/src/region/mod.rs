@@ -115,9 +115,9 @@ pub enum ContentError {
     /// C-1.
     #[error("cannot decompress chunk")]
     Decompress(#[from] DecompressError),
-    /// C-2. Holds the NBT error once the `nbt` module exists (P2).
-    #[error("cannot read chunk nbt: {0}")]
-    Nbt(String),
+    /// C-2.
+    #[error("cannot read chunk nbt")]
+    Nbt(#[from] crate::nbt::NbtError),
 }
 
 /// A chunk slot whose payload lies inside the file.

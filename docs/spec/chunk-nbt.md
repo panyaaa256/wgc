@@ -8,7 +8,7 @@
 - nanonbt を使うのは `core::nbt` の中だけ。外には次の関数と、依存のない構造体だけを公開する。
   - `read_chunk_summary(nbt: &[u8]) -> Result<ChunkSummary, NbtError>`
   - `level.dat` とプレイヤーデータを読む関数（P3、P5 で追加）
-- 必要なフィールドだけを読み、それ以外は読み飛ばす。タグの有無を区別できるようにする。
+- nanonbt の derive は `Option` と「型が違えば無視」に対応しないので、低レベルの API（`SliceReader`、`read_name_into`、`skip_nbt`）で必要なフィールドだけを読み、それ以外は読み飛ばす。
 
 ## 読むフィールド
 
@@ -43,6 +43,7 @@ pub enum NbtError {
     InvalidTagType(u8),
     InvalidString,
     RootNotCompound,
+    Malformed,          // その他（長さの不正、深すぎる入れ子など）
 }
 ```
 
