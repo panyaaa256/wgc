@@ -5,5 +5,9 @@
 //! `docs/spec/types.md`). Modules are added phase by phase as described in
 //! `docs/spec.md`.
 
+pub mod region;
+pub mod types;
+pub mod versions;
+
 /// Version of the tool, recorded in reports and `.wgc/*.json`.
 pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");

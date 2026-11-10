@@ -93,6 +93,8 @@ pub enum ContentError {
 
 pub enum DecompressError {
     UnsupportedCompression(u8),      // 127 と不明な方式
+    MissingExternal,                 // 外部ファイルの方式なのに、中身を渡されなかった
+    Truncated,                       // ペイロードが 5 バイト未満
     Corrupt,                         // データの破損
     Lz4Checksum,
 }
@@ -100,11 +102,12 @@ pub enum DecompressError {
 
 ## 読み取りの API（例）
 
-- `RegionFile::parse(bytes: Vec<u8>, pos: RegionPos, mcc: &BTreeSet<ChunkPos>) -> RegionFile`（バイト列を所有し、構造エラーの一覧を持つ）
+- `RegionFile::parse(kind: FileKind, pos: RegionPos, bytes: Vec<u8>, external: &BTreeSet<ChunkPos>) -> RegionFile`（バイト列を所有し、構造エラーの一覧を持つ）
 - `issues() -> &[StructuralIssue]`
 - `entries()`: 各チャンクの `ChunkIndex`、`ChunkPos`、開始セクタ、セクタ数、タイムスタンプ、`L`、圧縮方式
 - `payload(index: ChunkIndex) -> Option<&[u8]>`
 - `decompress(payload: &[u8], external: Option<&[u8]>) -> Result<Vec<u8>, DecompressError>`
+- `write_region(source: &RegionFile, keep: &[ChunkIndex]) -> Vec<u8>`（下の「書き込み」）
 
 ファイル全体をメモリに読み込んでよい。
 
