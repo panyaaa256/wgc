@@ -4,7 +4,7 @@
 
 ## ファイル名
 
-- `r.<rx>.<rz>.mca`。座標は符号つき10進整数として解釈する（ゲームと同じく `r.00.00.mca` も受け入れる）。
+- `r.<rx>.<rz>.mca`。座標は `-?[0-9]+`（先頭の 0 は可、`+` は不可）。`r.00.00.mca` も受け入れる。チャンク座標が `i32` に収まらないリージョン座標は、リージョンファイルとして扱わない。
 - 形式に合わないファイルは、リージョンファイルとして扱わない。
 - 外部ファイル: 同じフォルダの `c.<cx>.<cz>.mcc`（絶対チャンク座標）。
 
@@ -43,7 +43,7 @@
 - 各ブロックのヘッダー（21 バイト）: マジック `LZ4Block`（8）、トークン（1。上位 4 ビットが方式 `0x10` 非圧縮 / `0x20` LZ4、下位 4 ビットが圧縮レベル）、圧縮後の長さ（i32 LE）、元の長さ（i32 LE）、チェックサム（i32 LE）。
 - ヘッダーの後に、圧縮後の長さの分のデータ。方式が LZ4 なら LZ4 のブロック形式で展開する。
 - チェックサムは、展開後のデータの XXHash32（シード `0x9747b28c`）の値を `& 0x0FFFFFFF` したもの。不一致は内容エラー C-1。
-- 元の長さが 0 のブロックで終わる。
+- 元の長さが 0 のブロックで終わる。終わりのブロックがないストリームは内容エラー C-1（lz4-java と同じ）。
 
 ## エラーの区分
 
@@ -96,6 +96,7 @@ pub enum DecompressError {
     MissingExternal,                 // 外部ファイルの方式なのに、中身を渡されなかった
     Truncated,                       // ペイロードが 5 バイト未満
     Corrupt,                         // データの破損
+    TooLarge,                        // 展開後が 256 MiB を超える
     Lz4Checksum,
 }
 ```
@@ -107,7 +108,7 @@ pub enum DecompressError {
 - `entries()`: 各チャンクの `ChunkIndex`、`ChunkPos`、開始セクタ、セクタ数、タイムスタンプ、`L`、圧縮方式
 - `payload(index: ChunkIndex) -> Option<&[u8]>`
 - `decompress(payload: &[u8], external: Option<&[u8]>) -> Result<Vec<u8>, DecompressError>`
-- `write_region(source: &RegionFile, keep: &[ChunkIndex]) -> Vec<u8>`（下の「書き込み」）
+- `write_region(source: &RegionFile, keep: &[ChunkIndex]) -> Result<Vec<u8>, WriteError>`（下の「書き込み」。`WriteError` は `MissingEntry`、`TooManySectors`）
 
 ファイル全体をメモリに読み込んでよい。
 

@@ -3,30 +3,40 @@
 use super::{HEADER_BYTES, RegionFile, SECTOR_BYTES};
 use crate::types::ChunkIndex;
 
+/// Why a region file cannot be repacked.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WriteError {
+    #[error("no chunk at index {}", .0.get())]
+    MissingEntry(ChunkIndex),
+    #[error("chunk at index {} needs more than 255 sectors", .0.get())]
+    TooManySectors(ChunkIndex),
+}
+
 /// Builds a new region file that contains only the chunks in `keep`.
 ///
 /// Chunks are placed by ascending index from sector 2. Each payload is copied
 /// byte for byte and padded to a sector boundary. Timestamps of kept chunks
 /// are preserved; all other slots are zero. `.mcc` files are not touched.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if an index in `keep` has no entry in `source`, or if a payload
+/// Fails if an index in `keep` has no entry in `source`, or if a payload
 /// needs more than 255 sectors. The plan only rewrites files without
-/// structural issues, so neither can happen there.
-pub fn write_region(source: &RegionFile, keep: &[ChunkIndex]) -> Vec<u8> {
+/// structural issues, so neither should happen there.
+pub fn write_region(source: &RegionFile, keep: &[ChunkIndex]) -> Result<Vec<u8>, WriteError> {
     let mut keep = keep.to_vec();
     keep.sort_unstable();
     keep.dedup();
 
     let mut out = vec![0u8; HEADER_BYTES];
     for index in keep {
-        let entry = source
-            .entry(index)
-            .unwrap_or_else(|| panic!("no entry at index {}", index.get()));
-        let payload = source.payload(index).expect("entry has a payload");
+        let entry = source.entry(index).ok_or(WriteError::MissingEntry(index))?;
+        let payload = source
+            .payload(index)
+            .ok_or(WriteError::MissingEntry(index))?;
         let offset = out.len() / SECTOR_BYTES;
-        let count = u8::try_from(entry.packed_sectors()).expect("payload fits in 255 sectors");
+        let count =
+            u8::try_from(entry.packed_sectors()).map_err(|_| WriteError::TooManySectors(index))?;
         out.extend_from_slice(payload);
         out.resize(out.len().div_ceil(SECTOR_BYTES) * SECTOR_BYTES, 0);
 
@@ -36,7 +46,7 @@ pub fn write_region(source: &RegionFile, keep: &[ChunkIndex]) -> Vec<u8> {
         out[SECTOR_BYTES + i * 4..SECTOR_BYTES + i * 4 + 4]
             .copy_from_slice(&entry.timestamp.to_be_bytes());
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -64,7 +74,7 @@ mod tests {
         assert!(source.issues().is_empty());
 
         let keep = [idx(900), idx(3), idx(500)];
-        let bytes = write_region(&source, &keep);
+        let bytes = write_region(&source, &keep).unwrap();
         let packed = parse(bytes.clone());
         assert!(packed.issues().is_empty());
 
@@ -103,7 +113,7 @@ mod tests {
         let packed = RegionFile::parse(
             FileKind::Entities,
             RegionPos::new(0, 0),
-            write_region(&source, &[idx(1)]),
+            write_region(&source, &[idx(1)]).unwrap(),
             &external,
         );
         assert!(packed.issues().is_empty());
@@ -113,13 +123,15 @@ mod tests {
     #[test]
     fn keeping_nothing_leaves_only_the_header() {
         let source = parse(build(&[chunk(1, 2, b"x")]));
-        assert_eq!(write_region(&source, &[]), vec![0u8; HEADER_BYTES]);
+        assert_eq!(write_region(&source, &[]).unwrap(), vec![0u8; HEADER_BYTES]);
     }
 
     #[test]
-    #[should_panic(expected = "no entry at index 2")]
-    fn missing_entry_panics() {
+    fn missing_entry_is_an_error() {
         let source = parse(build(&[chunk(1, 2, b"x")]));
-        write_region(&source, &[idx(2)]);
+        assert_eq!(
+            write_region(&source, &[idx(2)]),
+            Err(WriteError::MissingEntry(idx(2)))
+        );
     }
 }

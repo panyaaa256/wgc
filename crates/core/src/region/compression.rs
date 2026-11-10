@@ -11,6 +11,10 @@ const ZLIB: u8 = 2;
 const NONE: u8 = 3;
 const LZ4: u8 = 4;
 
+/// Largest decompressed chunk accepted. Larger output is treated as corrupt
+/// so that a hostile or broken `.mcc` cannot exhaust memory.
+pub const MAX_DECOMPRESSED_BYTES: usize = 256 * 1024 * 1024;
+
 /// Why a chunk's data cannot be decompressed (content error C-1).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DecompressError {
@@ -24,6 +28,8 @@ pub enum DecompressError {
     Truncated,
     #[error("compressed data is corrupt")]
     Corrupt,
+    #[error("decompressed data exceeds {MAX_DECOMPRESSED_BYTES} bytes")]
+    TooLarge,
     #[error("lz4 checksum mismatch")]
     Lz4Checksum,
 }
@@ -45,19 +51,23 @@ pub fn decompress(payload: &[u8], external: Option<&[u8]>) -> Result<Vec<u8>, De
         (compression, &payload[5..])
     };
     match method {
-        GZIP => read_all(MultiGzDecoder::new(data)),
-        ZLIB => read_all(ZlibDecoder::new(data)),
+        GZIP => read_all(MultiGzDecoder::new(data), MAX_DECOMPRESSED_BYTES),
+        ZLIB => read_all(ZlibDecoder::new(data), MAX_DECOMPRESSED_BYTES),
         NONE => Ok(data.to_vec()),
         LZ4 => lz4_block_stream(data),
-        _ => Err(DecompressError::UnsupportedCompression(compression)),
+        _ => Err(DecompressError::UnsupportedCompression(method)),
     }
 }
 
-fn read_all(mut reader: impl Read) -> Result<Vec<u8>, DecompressError> {
+fn read_all(reader: impl Read, limit: usize) -> Result<Vec<u8>, DecompressError> {
     let mut out = Vec::new();
     reader
+        .take(limit as u64 + 1)
         .read_to_end(&mut out)
         .map_err(|_| DecompressError::Corrupt)?;
+    if out.len() > limit {
+        return Err(DecompressError::TooLarge);
+    }
     Ok(out)
 }
 
@@ -71,8 +81,8 @@ const LZ4_LEVEL_BASE: u32 = 10;
 /// Decodes the lz4-java `LZ4BlockOutputStream` format.
 fn lz4_block_stream(mut data: &[u8]) -> Result<Vec<u8>, DecompressError> {
     let mut out = Vec::new();
-    // A stream that ends cleanly at a block boundary is accepted like a final empty block.
-    while !data.is_empty() {
+    // Like lz4-java's LZ4BlockInputStream, a stream must end with an empty block.
+    loop {
         if data.len() < LZ4_HEADER || &data[..8] != LZ4_MAGIC {
             return Err(DecompressError::Corrupt);
         }
@@ -90,6 +100,9 @@ fn lz4_block_stream(mut data: &[u8]) -> Result<Vec<u8>, DecompressError> {
         }
         if original_len > max_block || data.len() < LZ4_HEADER + compressed_len {
             return Err(DecompressError::Corrupt);
+        }
+        if out.len() + original_len > MAX_DECOMPRESSED_BYTES {
+            return Err(DecompressError::TooLarge);
         }
         let block = &data[LZ4_HEADER..LZ4_HEADER + compressed_len];
         let start = out.len();
@@ -116,7 +129,6 @@ fn lz4_block_stream(mut data: &[u8]) -> Result<Vec<u8>, DecompressError> {
         }
         data = &data[LZ4_HEADER + compressed_len..];
     }
-    Ok(out)
 }
 
 fn le_len(bytes: &[u8]) -> Result<usize, DecompressError> {
@@ -207,6 +219,39 @@ mod tests {
         assert_eq!(
             decompress(&payload(LZ4, &stream), None),
             Err(DecompressError::Corrupt)
+        );
+    }
+
+    #[test]
+    fn lz4_requires_the_end_block() {
+        let stream = fixture("noise_1000.lz4java");
+        let without_end = &stream[..stream.len() - LZ4_HEADER];
+        assert_eq!(
+            decompress(&payload(LZ4, without_end), None),
+            Err(DecompressError::Corrupt)
+        );
+    }
+
+    #[test]
+    fn oversized_output_is_rejected() {
+        let mut zl = ZlibEncoder::new(Vec::new(), Compression::fast());
+        zl.write_all(&[0u8; 1001]).unwrap();
+        let data = zl.finish().unwrap();
+        assert_eq!(
+            read_all(ZlibDecoder::new(&data[..]), 1000),
+            Err(DecompressError::TooLarge)
+        );
+        assert_eq!(
+            read_all(ZlibDecoder::new(&data[..]), 1001).unwrap().len(),
+            1001
+        );
+    }
+
+    #[test]
+    fn external_custom_compression_reports_the_method() {
+        assert_eq!(
+            decompress(&payload(127 + EXTERNAL_FLAG, b""), Some(b"x")),
+            Err(DecompressError::UnsupportedCompression(127))
         );
     }
 

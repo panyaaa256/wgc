@@ -13,7 +13,7 @@ use std::fmt;
 use crate::types::{ChunkIndex, ChunkPos, FileKind, RegionPos};
 
 pub use compression::{DecompressError, decompress};
-pub use write::write_region;
+pub use write::{WriteError, write_region};
 
 /// Size of a sector in bytes.
 pub const SECTOR_BYTES: usize = 4096;
@@ -23,9 +23,13 @@ pub const HEADER_BYTES: usize = 2 * SECTOR_BYTES;
 pub const EXTERNAL_FLAG: u8 = 128;
 
 /// Parses a region file name `r.<x>.<z>.mca`.
+///
+/// Coordinates are `-?[0-9]+` (leading zeros allowed). Regions whose chunk
+/// coordinates would not fit in an `i32` are rejected.
 pub fn parse_region_name(name: &str) -> Option<RegionPos> {
     let (x, z) = parse_pair(name, "r.", ".mca")?;
-    Some(RegionPos::new(x, z))
+    let fits = |v: i32| v.checked_mul(32).and_then(|c| c.checked_add(31)).is_some();
+    (fits(x) && fits(z)).then_some(RegionPos::new(x, z))
 }
 
 /// Parses an external chunk file name `c.<x>.<z>.mcc`.
@@ -42,7 +46,16 @@ pub fn external_name(pos: ChunkPos) -> String {
 fn parse_pair(name: &str, prefix: &str, suffix: &str) -> Option<(i32, i32)> {
     let inner = name.strip_prefix(prefix)?.strip_suffix(suffix)?;
     let (x, z) = inner.split_once('.')?;
-    Some((x.parse().ok()?, z.parse().ok()?))
+    Some((parse_coord(x)?, parse_coord(z)?))
+}
+
+/// Parses `-?[0-9]+` like the game's region file pattern (no leading `+`).
+fn parse_coord(s: &str) -> Option<i32> {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
 }
 
 /// Structural problem IDs S-1..S-8.
@@ -205,22 +218,26 @@ impl RegionFile {
                 index,
             ));
 
-            let start = sector_offset as usize * SECTOR_BYTES;
-            if start + 5 > len {
+            // u64 so that values from the file cannot overflow on 32-bit targets.
+            let file_len = len as u64;
+            let start = u64::from(sector_offset) * SECTOR_BYTES as u64;
+            if start + 4 > file_len {
                 self.issue(StructuralId::S4, Some(index));
                 continue;
             }
+            let start = start as usize; // < len
             let length = be_u32(&self.bytes, start);
             if length == 0 {
                 self.issue(StructuralId::S5, Some(index));
                 continue;
             }
-            if start + 4 + length as usize > len {
+            let payload_len = 4 + u64::from(length);
+            if payload_len > u64::from(sector_count) * SECTOR_BYTES as u64 {
+                self.issue(StructuralId::S6, Some(index));
+            }
+            if start as u64 + payload_len > file_len {
                 self.issue(StructuralId::S4, Some(index));
                 continue;
-            }
-            if 4 + length as usize > usize::from(sector_count) * SECTOR_BYTES {
-                self.issue(StructuralId::S6, Some(index));
             }
             let pos = index.to_chunk_pos(self.pos);
             let entry = Entry {
@@ -381,6 +398,14 @@ mod tests {
         assert_eq!(parse_region_name("r.0.0.mca.bak"), None);
         assert_eq!(parse_region_name("r.0.mca"), None);
         assert_eq!(parse_region_name("r.a.0.mca"), None);
+        assert_eq!(parse_region_name("r.+1.0.mca"), None);
+        assert_eq!(parse_region_name("r.-.0.mca"), None);
+        assert_eq!(parse_region_name("r.70000000.0.mca"), None);
+        assert_eq!(
+            parse_region_name("r.-67108864.67108863.mca"),
+            Some(RegionPos::new(-67_108_864, 67_108_863))
+        );
+        assert_eq!(parse_external_name("c.+1.0.mcc"), None);
         assert_eq!(
             parse_external_name("c.-33.5.mcc"),
             Some(ChunkPos::new(-33, 5))
@@ -462,6 +487,32 @@ mod tests {
         let file = parse(bytes);
         assert!(file.issues().is_empty());
         assert_eq!(file.entries().len(), 1);
+    }
+
+    #[test]
+    fn s4_unreadable_length_but_s5_when_length_is_readable() {
+        // File ends 4 bytes into the chunk's sector: the length is readable and zero.
+        let mut bytes = build(&[]);
+        set_location(&mut bytes, 1, 2, 1);
+        bytes.extend_from_slice(&[0, 0, 0, 0]);
+        assert_eq!(ids(&parse(bytes)), [(StructuralId::S5, Some(1))]);
+
+        let mut bytes = build(&[]);
+        set_location(&mut bytes, 1, 2, 1);
+        bytes.extend_from_slice(&[0, 0, 0]);
+        assert_eq!(ids(&parse(bytes)), [(StructuralId::S4, Some(1))]);
+    }
+
+    #[test]
+    fn s6_is_reported_together_with_s4() {
+        let mut bytes = build(&[]);
+        set_location(&mut bytes, 1, 2, 1);
+        bytes.extend_from_slice(&9000u32.to_be_bytes());
+        bytes.push(2);
+        assert_eq!(
+            ids(&parse(bytes)),
+            [(StructuralId::S4, Some(1)), (StructuralId::S6, Some(1))]
+        );
     }
 
     #[test]

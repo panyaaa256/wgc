@@ -1,12 +1,11 @@
 //! Command-line interface for `wgc` (docs/spec/cli.md).
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-
-/// IDs that `--force` accepts (docs/spec/cli.md "停止と `--force`").
-const FORCEABLE_IDS: [&str; 6] = ["T-1", "T-2", "T-3", "T-4", "T-5", "L-1"];
+use wgc_core::types::{DimensionId, GuardId};
 
 /// Exit code for errors (docs/spec/cli.md "終了コード").
 const EXIT_ERROR: u8 = 4;
@@ -80,8 +79,8 @@ struct GcArgs {
     out: Option<PathBuf>,
 
     /// Only delete chunks in this dimension (repeatable), e.g. the_nether or minecraft:the_end
-    #[arg(long = "dimension", visible_alias = "dim", value_name = "ID")]
-    dimensions: Vec<String>,
+    #[arg(long = "dimension", visible_alias = "dim", value_name = "ID", value_parser = parse_dimension)]
+    dimensions: Vec<DimensionId>,
 
     /// Continue past failed trust checks: all of them, or only the listed IDs (e.g. --force=T-3,T-5)
     #[arg(
@@ -122,26 +121,33 @@ struct VerifyArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Force {
     All,
-    Only(Vec<String>),
+    Only(BTreeSet<GuardId>),
 }
 
 fn parse_force(value: &str) -> Result<Force, String> {
     if value == "all" {
         return Ok(Force::All);
     }
-    let mut ids = Vec::new();
-    for id in value.split(',').map(str::trim) {
-        if !FORCEABLE_IDS.contains(&id) {
-            return Err(format!(
-                "unknown check ID '{id}' (expected one of {})",
-                FORCEABLE_IDS.join(", ")
-            ));
-        }
-        if !ids.iter().any(|known| known == id) {
-            ids.push(id.to_owned());
-        }
-    }
-    Ok(Force::Only(ids))
+    value
+        .split(',')
+        .map(|id| {
+            id.trim().parse::<GuardId>().map_err(|_| {
+                let known: Vec<&str> = GuardId::ALL.iter().map(|g| g.as_str()).collect();
+                format!(
+                    "unknown check ID '{}' (expected one of {})",
+                    id.trim(),
+                    known.join(", ")
+                )
+            })
+        })
+        .collect::<Result<_, _>>()
+        .map(Force::Only)
+}
+
+fn parse_dimension(value: &str) -> Result<DimensionId, String> {
+    DimensionId::parse(value).map_err(|_| {
+        format!("invalid dimension ID '{value}' (expected e.g. the_nether or minecraft:the_end)")
+    })
 }
 
 fn main() -> ExitCode {
@@ -170,7 +176,7 @@ mod tests {
         assert_eq!(parse_force("all"), Ok(Force::All));
         assert_eq!(
             parse_force("T-3,T-5,T-3"),
-            Ok(Force::Only(vec!["T-3".into(), "T-5".into()]))
+            Ok(Force::Only(BTreeSet::from([GuardId::T3, GuardId::T5])))
         );
         assert!(parse_force("T-9").is_err());
     }
@@ -191,6 +197,10 @@ mod tests {
         let Command::Gc(args) = cli.command else {
             panic!()
         };
-        assert_eq!(args.dimensions, ["the_end", "x:y"]);
+        assert_eq!(
+            args.dimensions,
+            [DimensionId::the_end(), DimensionId::parse("x:y").unwrap()]
+        );
+        assert!(Cli::try_parse_from(["wgc", "gc", "w", "--dim", "nether"]).is_err());
     }
 }
