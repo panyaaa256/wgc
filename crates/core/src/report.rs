@@ -77,11 +77,14 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
-    /// Whether any trust check failed or could not be confirmed (would stop `gc --out`).
+    /// Whether `gc --out` would stop where `--force` can continue: a trust
+    /// check failed or could not be confirmed, or `session.lock` is missing (L-1).
     pub fn has_stops(&self) -> bool {
-        self.trust
-            .iter()
-            .any(|t| matches!(t.status, TrustStatus::Fail | TrustStatus::Unknown))
+        self.lock == LockStatus::Missing
+            || self
+                .trust
+                .iter()
+                .any(|t| matches!(t.status, TrustStatus::Fail | TrustStatus::Unknown))
     }
 }
 
