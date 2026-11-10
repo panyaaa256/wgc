@@ -250,6 +250,24 @@ fn dimension_arguments() {
 }
 
 #[test]
+fn lists_are_counted_by_default_and_listed_with_verbose() {
+    let w = world();
+    write(&w.path().join("region/r.1.0.mca"), &[]);
+
+    let o = wgc(&["scan", s(w.path())]);
+    let text = stdout(&o);
+    assert!(text.contains("Also found: 1 empty file"), "{text}");
+    assert!(text.contains("--verbose"), "{text}");
+    assert!(!text.contains("r.1.0.mca"), "{text}");
+
+    let o = wgc(&["-v", "scan", s(w.path())]);
+    let text = stdout(&o);
+    assert!(text.contains("empty file region/r.1.0.mca"), "{text}");
+    assert!(!text.contains("Also found"), "{text}");
+    assert!(!text.contains("--verbose"), "{text}");
+}
+
+#[test]
 fn no_color_disables_escapes() {
     let w = world();
     let o = wgc_env(&["scan", s(w.path())], &[("NO_COLOR", "1")]);

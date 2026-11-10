@@ -21,6 +21,10 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
+    /// List the details in the summary (failed check targets, integrity problems, files not copied, seams)
+    #[arg(short, long, global = true, conflicts_with = "quiet")]
+    pub verbose: bool,
+
     /// Do not use colors
     #[arg(long, global = true)]
     pub no_color: bool,

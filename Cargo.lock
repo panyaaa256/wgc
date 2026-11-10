@@ -786,6 +786,7 @@ name = "wgc"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "console",
  "ctrlc",
  "flate2",
  "indicatif",

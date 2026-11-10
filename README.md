@@ -75,6 +75,7 @@ On Bukkit-based servers, do steps 3 and 4 for each world folder and leave `.wgc/
 | `--json` | `scan`, `gc`, `verify` | Print JSON on stdout. The human-readable summary goes to stderr |
 | `--strict` | `scan`, `gc` | Exit with code 1 when there are warnings |
 | `-q`, `--quiet` | all | Do not print progress or the summary. Warnings and errors are still printed |
+| `-v`, `--verbose` | `scan`, `gc` | List the details in the summary: failed check targets, integrity problems, files not copied and seams with old terrain. Cannot be used with `--quiet` |
 | `--no-color` | all | Do not use colors. `NO_COLOR` is also respected |
 
 Run `wgc <command> --help` for details.
