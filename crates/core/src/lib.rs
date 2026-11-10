@@ -1,0 +1,21 @@
+//! Analysis and processing for `wgc`.
+//!
+//! This crate never writes to the terminal. Long-running operations report
+//! progress and warnings through an observer instead (see
+//! `docs/spec/types.md`). Modules are added phase by phase as described in
+//! `docs/spec.md`.
+
+pub mod layout;
+pub mod lock;
+pub mod nbt;
+pub mod output;
+pub mod plan;
+pub mod region;
+pub mod report;
+mod sys;
+pub mod trust;
+pub mod types;
+pub mod versions;
+
+/// Version of the tool, recorded in reports and `.wgc/*.json`.
+pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
