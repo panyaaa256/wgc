@@ -31,6 +31,7 @@ impl DimensionId {
     pub fn parse(s: &str) -> Result<Self, DimensionIdError>; // "overworld" などは "minecraft:" を補う
     pub fn overworld() -> Self; pub fn the_nether() -> Self; pub fn the_end() -> Self;
 }
+pub fn short_dimension_id(id: &str) -> &str; // parse が受け付ける最も短い形（"minecraft:the_nether" → "the_nether"）
 
 pub enum FileKind { Region, Entities, Poi }
 
@@ -96,5 +97,5 @@ pub enum Warning {
 ## 受け入れ条件
 
 - `ChunkPos::from_packed` が負の座標を正しく戻す。`ChunkIndex::new(1024)` が `None` になる。`ChunkPos::index` と `to_chunk_pos` が往復する。
-- `DimensionId::parse` が省略形を補い、形の不正な ID を拒否する。
+- `DimensionId::parse` が省略形を補い、形の不正な ID を拒否する。`short_dimension_id` の結果を `parse` すると元の ID に戻る。
 - `GuardId` が `"T-1"` 形式で表示・シリアライズされる。

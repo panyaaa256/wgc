@@ -100,15 +100,28 @@ pub struct DimensionId(String);
 #[error("invalid dimension id {0:?}")]
 pub struct DimensionIdError(pub String);
 
+/// Vanilla dimensions that may be written without the `minecraft:` namespace.
+const VANILLA_PATHS: [&str; 3] = ["overworld", "the_nether", "the_end"];
+const VANILLA_NAMESPACE: &str = "minecraft:";
+
+/// The shortest form of a dimension ID that [`DimensionId::parse`] accepts:
+/// `the_nether` for `minecraft:the_nether`, and the ID itself otherwise.
+pub fn short_dimension_id(id: &str) -> &str {
+    id.strip_prefix(VANILLA_NAMESPACE)
+        .filter(|path| VANILLA_PATHS.contains(path))
+        .unwrap_or(id)
+}
+
 impl DimensionId {
     /// Parses `<namespace>:<path>`. A bare `overworld`, `the_nether` or `the_end`
     /// gets the `minecraft:` namespace.
     ///
     /// Namespaces may contain `[a-z0-9_.-]`, paths additionally `/`.
     pub fn parse(s: &str) -> Result<Self, DimensionIdError> {
-        let full = match s {
-            "overworld" | "the_nether" | "the_end" => format!("minecraft:{s}"),
-            _ => s.to_owned(),
+        let full = if VANILLA_PATHS.contains(&s) {
+            format!("{VANILLA_NAMESPACE}{s}")
+        } else {
+            s.to_owned()
         };
         let Some((namespace, path)) = full.split_once(':') else {
             return Err(DimensionIdError(s.to_owned()));
@@ -364,6 +377,21 @@ mod tests {
         );
         for bad in ["", "nether", ":x", "x:", "Upper:case", "a:b:c", "a b:c"] {
             assert!(DimensionId::parse(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn short_dimension_id_is_accepted_by_parse() {
+        assert_eq!(short_dimension_id("minecraft:the_nether"), "the_nether");
+        // Only the vanilla dimensions have a short form.
+        assert_eq!(short_dimension_id("minecraft:custom"), "minecraft:custom");
+        assert_eq!(short_dimension_id("my_pack:overworld"), "my_pack:overworld");
+        for id in [
+            DimensionId::overworld(),
+            DimensionId::the_nether(),
+            DimensionId::the_end(),
+        ] {
+            assert_eq!(DimensionId::parse(short_dimension_id(id.as_str())), Ok(id));
         }
     }
 

@@ -132,7 +132,9 @@ fn scan_and_strict() {
     let w = world();
     let o = wgc(&["scan", s(w.path())]);
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
-    assert!(stdout(&o).contains("minecraft:overworld"));
+    // The table shows vanilla dimensions without the namespace.
+    assert!(stdout(&o).contains("  overworld "), "{}", stdout(&o));
+    assert!(!stdout(&o).contains("minecraft:"));
     // T-3 is unknown (no players): a warning, so --strict exits with 1.
     assert_eq!(
         wgc(&["scan", s(w.path()), "--strict"]).status.code(),
@@ -147,8 +149,9 @@ fn json_goes_to_stdout_alone() {
     assert_eq!(o.status.code(), Some(0));
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).expect("stdout is only JSON");
     assert_eq!(v["schema"], "wgc.scan/1");
+    assert_eq!(v["dimensions"][0]["id"], "minecraft:overworld");
     assert!(
-        stderr(&o).contains("minecraft:overworld"),
+        stderr(&o).contains("  overworld "),
         "summary goes to stderr"
     );
 }
