@@ -4,8 +4,11 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 
-use super::copy::Written;
+use rayon::prelude::*;
+
+use super::copy::{Written, WrittenFile};
 use super::record::{ChangedFile, Complete, SourceState};
 use super::{OutputError, RECORD_DIR, VerifyFailure, destination, io_err, is_excluded};
 use crate::layout::WorldFiles;
@@ -24,81 +27,25 @@ pub(crate) fn check_output(
     observer: &dyn Observer,
     cancel: &AtomicBool,
 ) -> Result<(), OutputError> {
-    let mut failures = Vec::new();
+    // Counting and reporting under one lock keeps `done` increasing for the observer.
     let total = written.files.len() as u64;
-    for (n, (dest, file)) in written.files.iter().enumerate() {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(OutputError::Cancelled);
-        }
-        observer.progress(Progress::Verifying {
-            done: n as u64,
-            total,
-        });
-        let fail = |check, detail: String| VerifyFailure {
-            check,
-            path: dest.clone(),
-            detail,
-        };
-        match &file.rewrite {
-            None => {
-                // V-4: copies have the source's size.
-                let a = fs::metadata(&file.source)
-                    .map_err(io_err(&file.source))?
-                    .len();
-                let b = fs::metadata(dest).map_err(io_err(dest))?.len();
-                if a != b {
-                    failures.push(fail("V-4", format!("size {b}, expected {a}")));
-                }
+    let done = Mutex::new(0u64);
+    observer.progress(Progress::Verifying { done: 0, total });
+    let per_file: Vec<Vec<VerifyFailure>> = written
+        .files
+        .par_iter()
+        .map(|(dest, file)| {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(OutputError::Cancelled);
             }
-            Some(r) => {
-                let t = &plan.dimensions[r.dim].triples[r.triple];
-                let Some(FileAction::Rewrite { keep }) = t.action(r.kind) else {
-                    failures.push(fail(
-                        "V-2",
-                        "file was not planned to be rewritten".to_owned(),
-                    ));
-                    continue;
-                };
-                let externals = t
-                    .file(r.kind)
-                    .map(|f| f.externals.iter().map(|x| x.pos).collect())
-                    .unwrap_or_default();
-                let source = RegionFile::parse(
-                    r.kind,
-                    t.pos,
-                    fs::read(&file.source).map_err(io_err(&file.source))?,
-                    &externals,
-                );
-                let output = RegionFile::parse(
-                    r.kind,
-                    t.pos,
-                    fs::read(dest).map_err(io_err(dest))?,
-                    &externals,
-                );
-                // V-1: no structural issues.
-                if !output.issues().is_empty() {
-                    failures.push(fail("V-1", format!("{:?}", output.issues())));
-                }
-                // V-2: exactly the kept entries.
-                let indices: Vec<_> = output.entries().iter().map(|e| e.index).collect();
-                if indices != keep {
-                    failures.push(fail(
-                        "V-2",
-                        format!("entries {indices:?}, expected {keep:?}"),
-                    ));
-                }
-                // V-3: identical payloads and timestamps.
-                for index in &keep {
-                    let same_payload = output.payload(*index) == source.payload(*index);
-                    let same_time = output.entry(*index).map(|e| e.timestamp)
-                        == source.entry(*index).map(|e| e.timestamp);
-                    if !same_payload || !same_time {
-                        failures.push(fail("V-3", format!("chunk {} differs", index.get())));
-                    }
-                }
-            }
-        }
-    }
+            let failures = check_file(plan, dest, file)?;
+            let mut n = done.lock().unwrap_or_else(PoisonError::into_inner);
+            *n += 1;
+            observer.progress(Progress::Verifying { done: *n, total });
+            Ok(failures)
+        })
+        .collect::<Result<_, OutputError>>()?;
+    let mut failures: Vec<VerifyFailure> = per_file.into_iter().flatten().collect();
 
     // V-5: compare the output with what the plan requires, derived here
     // independently of what the writer chose to write.
@@ -139,12 +86,82 @@ pub(crate) fn check_output(
         });
     }
 
-    observer.progress(Progress::Verifying { done: total, total });
     if failures.is_empty() {
         Ok(())
     } else {
         Err(OutputError::Verification(failures))
     }
+}
+
+/// V-1..V-4 for one written file.
+fn check_file(
+    plan: &Plan,
+    dest: &Path,
+    file: &WrittenFile,
+) -> Result<Vec<VerifyFailure>, OutputError> {
+    let mut failures = Vec::new();
+    let fail = |check, detail: String| VerifyFailure {
+        check,
+        path: dest.to_path_buf(),
+        detail,
+    };
+    let Some(r) = &file.rewrite else {
+        // V-4: copies have the source's size.
+        let a = fs::metadata(&file.source)
+            .map_err(io_err(&file.source))?
+            .len();
+        let b = fs::metadata(dest).map_err(io_err(dest))?.len();
+        if a != b {
+            failures.push(fail("V-4", format!("size {b}, expected {a}")));
+        }
+        return Ok(failures);
+    };
+    let t = &plan.dimensions[r.dim].triples[r.triple];
+    let Some(FileAction::Rewrite { keep }) = t.action(r.kind) else {
+        failures.push(fail(
+            "V-2",
+            "file was not planned to be rewritten".to_owned(),
+        ));
+        return Ok(failures);
+    };
+    let externals = t
+        .file(r.kind)
+        .map(|f| f.externals.iter().map(|x| x.pos).collect())
+        .unwrap_or_default();
+    let source = RegionFile::parse(
+        r.kind,
+        t.pos,
+        fs::read(&file.source).map_err(io_err(&file.source))?,
+        &externals,
+    );
+    let output = RegionFile::parse(
+        r.kind,
+        t.pos,
+        fs::read(dest).map_err(io_err(dest))?,
+        &externals,
+    );
+    // V-1: no structural issues.
+    if !output.issues().is_empty() {
+        failures.push(fail("V-1", format!("{:?}", output.issues())));
+    }
+    // V-2: exactly the kept entries.
+    let indices: Vec<_> = output.entries().iter().map(|e| e.index).collect();
+    if indices != keep {
+        failures.push(fail(
+            "V-2",
+            format!("entries {indices:?}, expected {keep:?}"),
+        ));
+    }
+    // V-3: identical payloads and timestamps.
+    for index in &keep {
+        let same_payload = output.payload(*index) == source.payload(*index);
+        let same_time =
+            output.entry(*index).map(|e| e.timestamp) == source.entry(*index).map(|e| e.timestamp);
+        if !same_payload || !same_time {
+            failures.push(fail("V-3", format!("chunk {} differs", index.get())));
+        }
+    }
+    Ok(failures)
 }
 
 /// Destinations of every source file that the plan keeps.

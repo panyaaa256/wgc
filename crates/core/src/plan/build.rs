@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use super::*;
 use crate::layout::{self, DimensionFiles, TripleFiles};
 use crate::nbt::{ChunkSummary, read_chunk_summary};
-use crate::region::{RegionFile, decompress};
+use crate::region::{Decompressor, RegionFile};
 use crate::types::{Known, Observer, Progress};
 
 /// Reads the world and decides what to delete and how to write every file.
@@ -187,6 +187,7 @@ fn chunk_summaries(
     wanted: impl Fn(ChunkPos) -> bool,
 ) -> Result<ChunkSummaries, PlanError> {
     let mut chunks = Vec::new();
+    let mut decompressor = Decompressor::new();
     for entry in file.entries().iter().filter(|e| wanted(e.pos)) {
         // Every entry has a payload; `RegionFile::parse` lists no other.
         let Some(payload) = file.payload(entry.index) else {
@@ -196,9 +197,10 @@ fn chunk_summaries(
             Some(path) if entry.is_external() => Some(read(path)?),
             _ => None,
         };
-        let summary = decompress(payload, external.as_deref())
+        let summary = decompressor
+            .decompress(payload, external.as_deref())
             .map_err(ContentError::from)
-            .and_then(|nbt| read_chunk_summary(&nbt).map_err(ContentError::from));
+            .and_then(|nbt| read_chunk_summary(nbt).map_err(ContentError::from));
         chunks.push((entry.index, entry.pos, summary));
     }
     Ok(chunks)

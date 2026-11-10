@@ -67,7 +67,7 @@ wgc verify <out>                     # 書き戻してよいかの確認
 |---|---|
 | core のモジュール | `types`、`region`、`nbt`、`layout`、`lock`、`plan`、`trust`、`report`、`output` |
 | 依存の向き | `cli` → `core`。`core` は CLI の依存を持たず、端末に出力しない（types.md「警告・進捗・中断」） |
-| 並列化 | リージョン三つ組の単位（`rayon`） |
+| 並列化 | Plan の作成はリージョン三つ組の単位、書き出しと検証はファイルの単位（`rayon`） |
 
 | crate | 用途 | 使う側 |
 |---|---|---|

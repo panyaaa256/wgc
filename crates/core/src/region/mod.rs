@@ -12,7 +12,7 @@ use std::fmt;
 
 use crate::types::{ChunkIndex, ChunkPos, FileKind, RegionPos};
 
-pub use compression::{DecompressError, decompress};
+pub use compression::{DecompressError, Decompressor, decompress};
 pub use write::{WriteError, write_region};
 
 /// Size of a sector in bytes.

@@ -108,6 +108,7 @@ pub enum DecompressError {
 - `entries()`: 各チャンクの `ChunkIndex`、`ChunkPos`、開始セクタ、セクタ数、タイムスタンプ、`L`、圧縮方式
 - `payload(index: ChunkIndex) -> Option<&[u8]>`
 - `decompress(payload: &[u8], external: Option<&[u8]>) -> Result<Vec<u8>, DecompressError>`
+- `Decompressor::decompress(&mut self, payload: &[u8], external: Option<&[u8]>) -> Result<&[u8], DecompressError>`（`decompress` と同じ結果。zlib の展開の状態と出力のバッファを使い回す。多くのチャンクを続けて展開するときはこちらを使う。結果は次の呼び出しまで有効）
 - `write_region(source: &RegionFile, keep: &[ChunkIndex]) -> Result<Vec<u8>, WriteError>`（下の「書き込み」。`WriteError` は `MissingEntry`、`TooManySectors`）
 
 ファイル全体をメモリに読み込んでよい。
