@@ -3,9 +3,10 @@
 
 use std::io::{IsTerminal, Write};
 use std::path::Path;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use wgc_core::layout::{LayoutKind, WorldLayout};
 use wgc_core::report::{LockStatus, ScanReport, TrustStatus};
 use wgc_core::types::{Observer, Progress, Warning};
@@ -61,12 +62,29 @@ impl Style {
     }
 }
 
+const PROGRESS_TEMPLATE: &str = "{prefix:<9} [{bar:20}] {pos}/{len}  ETA {eta}";
+const PROGRESS_TEMPLATE_COLOR: &str = "{prefix:<9} [{bar:20.cyan/blue}] {pos}/{len}  ETA {eta}";
+
+fn progress_style(color: bool) -> ProgressStyle {
+    let template = if color {
+        PROGRESS_TEMPLATE_COLOR
+    } else {
+        PROGRESS_TEMPLATE
+    };
+    ProgressStyle::with_template(template)
+        .unwrap_or_else(|_| ProgressStyle::default_bar())
+        .progress_chars("#>-")
+}
+
+/// The bar of the phase in progress, labeled with the phase name.
+type ActiveBar = Option<(&'static str, ProgressBar)>;
+
 /// Prints warnings (always) and progress (only on a terminal, unless quiet) to stderr.
 pub struct Terminal {
     pub style: Style,
     show_progress: bool,
     warnings: AtomicU64,
-    last: Mutex<Option<(&'static str, u64, u64)>>,
+    bar: Mutex<ActiveBar>,
 }
 
 impl Terminal {
@@ -78,7 +96,7 @@ impl Terminal {
             },
             show_progress: tty && !quiet,
             warnings: AtomicU64::new(0),
-            last: Mutex::new(None),
+            bar: Mutex::new(None),
         }
     }
 
@@ -86,22 +104,26 @@ impl Terminal {
         self.warnings.load(Ordering::Relaxed)
     }
 
+    /// Clears the bar for good: nothing is drawn after an error.
     pub fn error(&self, text: &str) {
-        self.clear_progress();
+        if let Some((_, bar)) = self.lock_bar().take() {
+            bar.finish_and_clear();
+        }
         eprintln!("{} {text}", self.style.red("error:"));
     }
 
+    /// Hides the bar while printing, then redraws it below the warning.
     pub fn warn_text(&self, text: &str) {
         self.warnings.fetch_add(1, Ordering::Relaxed);
-        self.clear_progress();
-        eprintln!("{} {text}", self.style.yellow("warning:"));
+        let line = format!("{} {text}", self.style.yellow("warning:"));
+        match &*self.lock_bar() {
+            Some((_, bar)) => bar.suspend(|| eprintln!("{line}")),
+            None => eprintln!("{line}"),
+        }
     }
 
-    fn clear_progress(&self) {
-        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
-        if self.show_progress && last.take().is_some() {
-            eprint!("\r\x1b[2K");
-        }
+    fn lock_bar(&self) -> MutexGuard<'_, ActiveBar> {
+        self.bar.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -115,19 +137,20 @@ impl Observer for Terminal {
             Progress::Writing { done, total } => ("Writing", done, total),
             Progress::Verifying { done, total } => ("Verifying", done, total),
         };
-        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
-        // Keep the bar from going backwards and redraw at most every 1 %.
-        if let Some((l, d, _)) = *last
-            && l == label
-            && (done <= d || (done < total && (done - d) * 100 < total.max(1)))
-        {
-            return;
+        let mut active = self.lock_bar();
+        // Core reports the phases one after another, each starting from `done = 0`.
+        if active.as_ref().is_none_or(|(l, _)| *l != label) {
+            let bar = ProgressBar::with_draw_target(Some(total), ProgressDrawTarget::stderr())
+                .with_style(progress_style(self.style.color))
+                .with_prefix(label);
+            *active = Some((label, bar));
         }
-        *last = Some((label, done, total));
-        eprint!("\r\x1b[2K{label} {done}/{total}");
-        if done >= total {
-            eprintln!();
-            *last = None;
+        if let Some((_, bar)) = active.as_ref() {
+            bar.set_position(done);
+            if done >= total {
+                bar.finish();
+                *active = None;
+            }
         }
     }
 
@@ -433,6 +456,16 @@ mod tests {
         assert_eq!(bytes(1023), "1023 B");
         assert_eq!(bytes(1536), "1.5 KiB");
         assert_eq!(bytes(3 * 1024 * 1024 * 1024), "3.0 GiB");
+    }
+
+    #[test]
+    fn progress_templates_parse() {
+        for template in [PROGRESS_TEMPLATE, PROGRESS_TEMPLATE_COLOR] {
+            assert!(
+                ProgressStyle::with_template(template).is_ok(),
+                "invalid template: {template}"
+            );
+        }
     }
 
     #[test]

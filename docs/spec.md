@@ -81,6 +81,7 @@ wgc verify <out>                     # 書き戻してよいかの確認
 | serde、serde_json | JSON | core（`report`、`output`） |
 | rayon | 並列化 | core |
 | clap | 引数 | cli |
+| indicatif | 進捗の表示 | cli |
 
 P0 の完了条件: `cargo build`、`cargo test`、`wgc --help` が動く。
 
