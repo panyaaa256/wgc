@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use wgc_core::layout::{LayoutKind, WorldLayout};
 use wgc_core::report::{DimensionReport, LockStatus, ScanReport, TrustStatus};
-use wgc_core::types::{GuardId, Observer, Progress, Warning};
+use wgc_core::types::{GuardId, Observer, Progress, Warning, short_dimension_id};
 
 use crate::messages;
 
@@ -265,7 +265,7 @@ struct DimensionRow<'a> {
 impl<'a> DimensionRow<'a> {
     fn of(d: &'a DimensionReport) -> Self {
         DimensionRow {
-            label: d.id.as_str(),
+            label: short_dimension_id(&d.id),
             before: d.size.region + d.size.entities + d.size.poi,
             chunks: d.chunks.total,
             delete: d.gc.delete,
@@ -364,12 +364,15 @@ fn wide_table(
         w = label_width + 2
     );
     let mut width = text_width(&header);
-    let mut lines = vec![style.bold(&header)];
-    for (label, cells) in &body {
+    // Rules under the header and above the total, as wide as the columns.
+    let rule = format!("  {}", "─".repeat(width - 2));
+    let mut lines = vec![style.bold(&header), style.dim(&rule)];
+    for (i, (label, cells)) in body.iter().enumerate() {
         let label = format!("{label:<label_width$}");
         let (mut plain, mut painted) = columns(&mut cells.iter().map(String::as_str));
-        let is_total = lines.len() == body.len();
+        let is_total = i + 1 == body.len();
         if is_total {
+            lines.push(style.dim(&rule));
             let saves = saves(total);
             plain.push_str(&format!("  ({saves})"));
             painted.push_str(&format!("  ({})", style.bold_green(&saves)));
@@ -684,6 +687,8 @@ pub fn layout_paths(layout: &WorldLayout) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
@@ -710,28 +715,33 @@ mod tests {
 
     #[test]
     fn wide_table_aligns_columns_and_sums_the_total() {
-        let rows = [
-            row("minecraft:overworld", 4096, 2),
-            row("minecraft:the_end", 0, 0),
-        ];
+        let rows = [row("overworld", 4096, 2), row("the_end", 0, 0)];
         let total = DimensionRow::total(&rows);
         assert_eq!((total.chunks, total.counts.seams), (20, 2));
 
         let (width, lines) = wide_table(&rows, &total, Style { color: false });
-        assert_eq!(lines.len(), 4);
+        assert_eq!(lines.len(), 6);
         assert!(lines[0].starts_with("Dimensions:"));
-        assert!(lines[3].trim_start().starts_with("total"));
-        assert!(lines[3].ends_with("(saves 2.0 KiB)"), "{}", lines[3]);
+        assert!(lines[5].trim_start().starts_with("total"));
+        assert!(lines[5].ends_with("(saves 2.0 KiB)"), "{}", lines[5]);
         assert_eq!(width, lines.iter().map(|l| text_width(l)).max().unwrap());
         // Every column ends at the same place in the header and the rows.
         let seams_end = lines[0].find("seams").unwrap() + "seams".len();
-        assert_eq!(&lines[1][seams_end - 1..seams_end], "2");
-        assert_eq!(&lines[2][seams_end - 1..seams_end], "0");
+        assert_eq!(&lines[2][seams_end - 1..seams_end], "2");
+        assert_eq!(&lines[3][seams_end - 1..seams_end], "0");
+        // The rules under the header and above the total end with the last column.
+        for rule in [&lines[1], &lines[4]] {
+            assert_eq!(
+                rule.trim_start().chars().collect::<BTreeSet<_>>(),
+                BTreeSet::from(['─'])
+            );
+            assert_eq!(text_width(rule), seams_end);
+        }
     }
 
     #[test]
     fn colors_do_not_change_the_measured_width() {
-        let rows = [row("minecraft:overworld", 4096, 0)];
+        let rows = [row("overworld", 4096, 0)];
         let total = DimensionRow::total(&rows);
         let (plain, _) = wide_table(&rows, &total, Style { color: false });
         let (colored, _) = wide_table(&rows, &total, Style { color: true });
