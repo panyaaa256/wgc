@@ -234,10 +234,7 @@ pub fn run_gc(
 /// Checks that `out` is new or empty and does not overlap the world.
 /// Returns its absolute form (canonical as far as it exists).
 fn check_output(layout: &WorldLayout, out: &Path) -> Result<PathBuf, OutputError> {
-    let absolute = std::path::absolute(out).map_err(io_err(out))?;
-    let base = existing_ancestor(&absolute);
-    let canonical_base = fs::canonicalize(&base).map_err(io_err(&base))?;
-    let rest = absolute.strip_prefix(&base).unwrap_or(Path::new(""));
+    let (base, rest) = split_existing(out);
     // `..` in a part that does not exist yet would be resolved only when it is
     // created, so the overlap check below could not see where it leads.
     if rest.components().any(|c| {
@@ -246,8 +243,11 @@ fn check_output(layout: &WorldLayout, out: &Path) -> Result<PathBuf, OutputError
             std::path::Component::Normal(_) | std::path::Component::CurDir
         )
     }) {
-        return Err(OutputError::InvalidOutputPath { path: absolute });
+        // Not `std::path::absolute`: it would drop the `..` on Windows.
+        let path = std::env::current_dir().map_or_else(|_| out.to_path_buf(), |d| d.join(out));
+        return Err(OutputError::InvalidOutputPath { path });
     }
+    let canonical_base = fs::canonicalize(&base).map_err(io_err(&base))?;
     let resolved = canonical_base.join(rest);
 
     match fs::read_dir(&resolved) {
@@ -273,6 +273,29 @@ fn check_output(layout: &WorldLayout, out: &Path) -> Result<PathBuf, OutputError
         }
     }
     Ok(resolved)
+}
+
+/// Splits `path` into its longest existing leading part (`.` if none) and the
+/// rest.
+///
+/// Components are checked one at a time from the start, before anything
+/// normalizes the path: Windows resolves `..` lexically (so `missing\..`
+/// "exists"), and so does `std::path::absolute` there.
+fn split_existing(path: &Path) -> (PathBuf, PathBuf) {
+    let mut base = PathBuf::new();
+    let mut rest = path.components();
+    while let Some(component) = rest.clone().next() {
+        let next = base.join(component);
+        if !next.exists() {
+            break;
+        }
+        base = next;
+        rest.next();
+    }
+    if base.as_os_str().is_empty() {
+        base = PathBuf::from(".");
+    }
+    (base, rest.as_path().to_path_buf())
 }
 
 /// The deepest existing ancestor of `path` (or `path` itself).

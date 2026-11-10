@@ -340,6 +340,27 @@ fn dot_dot_after_the_existing_part_is_refused() {
 }
 
 #[test]
+fn dot_dot_in_the_existing_part_is_allowed() {
+    let w = world();
+    let o = tempfile::tempdir().unwrap();
+    std::fs::create_dir(o.path().join("sub")).unwrap();
+    run(w.path(), &o.path().join("sub/../out")).unwrap();
+    assert!(o.path().join("out/.wgc/complete.json").is_file());
+}
+
+#[test]
+fn split_existing_stops_at_the_first_missing_component() {
+    let o = tempfile::tempdir().unwrap();
+    let (base, rest) = split_existing(&o.path().join("missing/../../escape"));
+    assert_eq!(base, o.path());
+    assert_eq!(rest, Path::new("missing/../../escape"));
+
+    let (base, rest) = split_existing(Path::new("wgc-no-such-folder/out"));
+    assert_eq!(base, Path::new("."));
+    assert_eq!(rest, Path::new("wgc-no-such-folder/out"));
+}
+
+#[test]
 fn failure_json_makes_verify_incomplete() {
     let w = world();
     let o = tempfile::tempdir().unwrap();
