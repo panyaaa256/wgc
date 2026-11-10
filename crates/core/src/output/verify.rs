@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::copy::Written;
 use super::record::{ChangedFile, Complete, SourceState};
-use super::{OutputError, RECORD_DIR, VerifyFailure, destination, io_err};
+use super::{OutputError, RECORD_DIR, VerifyFailure, destination, io_err, is_excluded};
 use crate::layout::WorldFiles;
 use crate::lock::{LockError, SessionLock};
-use crate::plan::{FileAction, Plan};
+use crate::plan::{ExternalAction, FileAction, Plan};
 use crate::region::RegionFile;
 use crate::types::{Observer, Progress};
 
@@ -100,43 +100,36 @@ pub(crate) fn check_output(
         }
     }
 
-    // V-5: nothing missing, nothing extra.
-    let expected: BTreeSet<&PathBuf> = written.files.keys().collect();
+    // V-5: compare the output with what the plan requires, derived here
+    // independently of what the writer chose to write.
+    let expected = expected_outputs(plan, walked, out);
     let found = crate::layout::files_in(std::slice::from_ref(&out.to_path_buf()))?;
     let record_dir = out.join(RECORD_DIR);
-    for f in &found.files {
-        if !f.path.starts_with(&record_dir) && !expected.contains(&f.path) {
-            failures.push(VerifyFailure {
-                check: "V-5",
-                path: f.path.clone(),
-                detail: "unexpected file".to_owned(),
-            });
-        }
+    let found_paths: BTreeSet<&PathBuf> = found
+        .files
+        .iter()
+        .map(|f| &f.path)
+        .filter(|p| !p.starts_with(&record_dir))
+        .collect();
+    for path in found_paths.difference(&expected.iter().collect()) {
+        failures.push(VerifyFailure {
+            check: "V-5",
+            path: (*path).clone(),
+            detail: "unexpected file".to_owned(),
+        });
     }
-    let found_paths: BTreeSet<&PathBuf> = found.files.iter().map(|f| &f.path).collect();
     for path in &expected {
         if !found_paths.contains(path) {
             failures.push(VerifyFailure {
                 check: "V-5",
-                path: (*path).clone(),
+                path: path.clone(),
                 detail: "missing file".to_owned(),
-            });
-        }
-    }
-    for omitted in &plan.omitted_other_files {
-        let dest = destination(&plan.layout, out, &omitted.path);
-        if dest.exists() {
-            failures.push(VerifyFailure {
-                check: "V-5",
-                path: dest,
-                detail: "omitted file was written".to_owned(),
             });
         }
     }
 
     // V-6: the source did not change while we worked.
-    let now = SourceState::capture(&plan.layout, &crate::layout::world_files(&plan.layout)?)?;
-    let _ = walked;
+    let now = state.recapture()?;
     for change in state.diff(&now) {
         let (ChangedFile::Added(p) | ChangedFile::Removed(p) | ChangedFile::Modified(p)) = &change;
         failures.push(VerifyFailure {
@@ -152,6 +145,39 @@ pub(crate) fn check_output(
     } else {
         Err(OutputError::Verification(failures))
     }
+}
+
+/// Destinations of every source file that the plan keeps.
+fn expected_outputs(plan: &Plan, walked: &WorldFiles, out: &Path) -> BTreeSet<PathBuf> {
+    let layout = &plan.layout;
+    let mut omitted: BTreeSet<&Path> = plan
+        .omitted_other_files
+        .iter()
+        .map(|o| o.path.as_path())
+        .collect();
+    for dim in &plan.dimensions {
+        for t in &dim.triples {
+            for kind in crate::types::FileKind::ALL {
+                let Some(file) = t.file(kind) else {
+                    continue;
+                };
+                if matches!(t.action(kind), Some(FileAction::Omit(_))) {
+                    omitted.insert(&file.path);
+                }
+                for x in &file.externals {
+                    if t.external_action(kind, x.pos) == ExternalAction::Omit {
+                        omitted.insert(&x.path);
+                    }
+                }
+            }
+        }
+    }
+    walked
+        .files
+        .iter()
+        .filter(|f| !is_excluded(layout, &f.path) && !omitted.contains(f.path.as_path()))
+        .map(|f| destination(layout, out, &f.path))
+        .collect()
 }
 
 /// Result of a successful `wgc verify`.
@@ -196,7 +222,7 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, VerifyErr
 /// `wgc verify`: whether `out` can replace the original world now.
 pub fn verify(out: &Path, source: Option<&Path>) -> Result<VerifyOutcome, VerifyError> {
     let record = out.join(RECORD_DIR);
-    if !record.join("complete.json").is_file() {
+    if !record.join("complete.json").is_file() || record.join("failure.json").exists() {
         return Err(VerifyError::Incomplete {
             out: out.to_path_buf(),
         });
@@ -219,24 +245,10 @@ pub fn verify(out: &Path, source: Option<&Path>) -> Result<VerifyOutcome, Verify
     }
 
     let folders = state.world_folder_paths();
-    let walked = crate::layout::files_in(&folders).map_err(|e| VerifyError::Io {
+    let now = state.recapture().map_err(|e| VerifyError::Io {
         path: recorded.clone(),
         source: std::io::Error::other(e),
     })?;
-    let mut now = state.clone();
-    now.files.clear();
-    for f in &walked.files {
-        let meta = fs::metadata(&f.path).map_err(|source| VerifyError::Io {
-            path: f.path.clone(),
-            source,
-        })?;
-        now.files.push(super::record::SourceStateFile {
-            path: crate::report::rel_path(&recorded, &f.path)
-                .unwrap_or_else(|_| f.path.to_string_lossy().into_owned()),
-            size: meta.len(),
-            mtime_ns: super::record::mtime_ns(&meta),
-        });
-    }
     let changed = state.diff(&now);
     if !changed.is_empty() {
         return Err(VerifyError::Changed(changed));

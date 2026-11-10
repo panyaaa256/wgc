@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{OutputError, destination, io_err};
+use super::{OutputError, destination, io_err, is_excluded, sync_dir};
 use crate::layout::{WorldFile, WorldFiles};
 use crate::plan::{ExternalAction, FileAction, Plan, TriplePlan};
 use crate::region::{RegionFile, write_region};
@@ -66,13 +66,7 @@ pub(crate) fn write_output(
         .iter()
         .map(|o| o.path.as_path())
         .collect();
-    let lock_files: BTreeSet<PathBuf> = layout
-        .world_folders
-        .iter()
-        .map(|f| f.join(crate::lock::LOCK_FILE))
-        .collect();
-
-    for dir in &walked.dirs {
+    for dir in walked.dirs.iter().filter(|d| !is_excluded(layout, d)) {
         let dest = destination(layout, out, dir);
         fs::create_dir_all(&dest).map_err(io_err(&dest))?;
     }
@@ -94,16 +88,13 @@ pub(crate) fn write_output(
             done: n as u64,
             total,
         });
-        if lock_files.contains(&file.path) || omitted.contains(file.path.as_path()) {
+        if is_excluded(layout, &file.path) || omitted.contains(file.path.as_path()) {
             continue;
         }
         let dest = destination(layout, out, &file.path);
         let rewrite = match roles.get(file.path.as_path()) {
             Some(Role::Triple(d, i, t, kind)) => match t.action(*kind) {
-                Some(FileAction::Verbatim) | None => {
-                    copy_file(&file.path, &dest)?;
-                    None
-                }
+                Some(FileAction::Verbatim) | None => (copy_file(&file.path, &dest)?, None),
                 Some(FileAction::Rewrite { keep }) => {
                     let bytes = fs::read(&file.path).map_err(io_err(&file.path))?;
                     let externals = t
@@ -115,28 +106,26 @@ pub(crate) fn write_output(
                         path: file.path.clone(),
                         source: std::io::Error::other(e),
                     })?;
-                    write_file(&dest, &packed)?;
-                    Some(Rewrite {
-                        dim: *d,
-                        triple: *i,
-                        kind: *kind,
-                    })
+                    let handle = write_file(&dest, &packed)?;
+                    (
+                        handle,
+                        Some(Rewrite {
+                            dim: *d,
+                            triple: *i,
+                            kind: *kind,
+                        }),
+                    )
                 }
                 Some(FileAction::Omit(_)) => continue,
             },
             Some(Role::External(t, kind, pos)) => match t.external_action(*kind, *pos) {
-                ExternalAction::Copy => {
-                    copy_file(&file.path, &dest)?;
-                    None
-                }
+                ExternalAction::Copy => (copy_file(&file.path, &dest)?, None),
                 ExternalAction::Omit => continue,
             },
-            None => {
-                copy_file(&file.path, &dest)?;
-                None
-            }
+            None => (copy_file(&file.path, &dest)?, None),
         };
-        let owner_ok = copy_metadata(file, &dest)?;
+        let (handle, rewrite) = rewrite;
+        let owner_ok = finish(file, handle, &dest)?;
         if !owner_ok && !warned_owner {
             warned_owner = true;
             written.owner_not_preserved = true;
@@ -153,65 +142,58 @@ pub(crate) fn write_output(
     observer.progress(Progress::Writing { done: total, total });
 
     // Directory entries must be durable before complete.json says the output is done.
-    for dir in walked.dirs.iter().rev() {
+    for dir in walked.dirs.iter().rev().filter(|d| !is_excluded(layout, d)) {
         sync_dir(&destination(layout, out, dir))?;
     }
     sync_dir(out)?;
     Ok(written)
 }
 
-/// Copies file contents (never a hard link) and syncs them.
-fn copy_file(source: &Path, dest: &Path) -> Result<(), OutputError> {
+/// Copies file contents (never a hard link). The file is synced by [`finish`].
+fn copy_file(source: &Path, dest: &Path) -> Result<File, OutputError> {
     let mut from = File::open(source).map_err(io_err(source))?;
     let mut to = File::create(dest).map_err(io_err(dest))?;
     std::io::copy(&mut from, &mut to).map_err(io_err(dest))?;
-    to.sync_all().map_err(io_err(dest))
+    Ok(to)
 }
 
-fn write_file(dest: &Path, bytes: &[u8]) -> Result<(), OutputError> {
+fn write_file(dest: &Path, bytes: &[u8]) -> Result<File, OutputError> {
     let mut to = File::create(dest).map_err(io_err(dest))?;
     to.write_all(bytes).map_err(io_err(dest))?;
-    to.sync_all().map_err(io_err(dest))
+    Ok(to)
 }
 
-/// Copies permissions and modification time; owner and group when running
-/// as root. Returns whether the owner matches the source.
-fn copy_metadata(file: &WorldFile, dest: &Path) -> Result<bool, OutputError> {
+/// Sets the modification time on the open handle, then the owner (as root),
+/// then the permissions (after chown, which clears setuid/setgid), and syncs
+/// data and metadata. Returns whether the owner matches the source.
+fn finish(file: &WorldFile, handle: File, dest: &Path) -> Result<bool, OutputError> {
     let meta = fs::metadata(&file.path).map_err(io_err(&file.path))?;
-    fs::set_permissions(dest, meta.permissions()).map_err(io_err(dest))?;
     if let Ok(modified) = meta.modified() {
-        // Opened for writing only to set the time; read-only files are written before chmod.
-        if let Ok(f) = File::options().write(true).open(dest) {
-            let _ = f.set_modified(modified);
-        } else {
-            set_modified_readonly(dest, &meta, modified)?;
-        }
+        handle.set_modified(modified).map_err(io_err(dest))?;
     }
-    owner(&meta, dest)
-}
-
-/// Sets the time of a file whose permissions forbid opening it for writing.
-fn set_modified_readonly(
-    dest: &Path,
-    meta: &fs::Metadata,
-    modified: std::time::SystemTime,
-) -> Result<(), OutputError> {
-    let mut writable = meta.permissions();
-    #[allow(clippy::permissions_set_readonly_false)]
-    writable.set_readonly(false);
-    fs::set_permissions(dest, writable).map_err(io_err(dest))?;
-    if let Ok(f) = File::options().write(true).open(dest) {
-        let _ = f.set_modified(modified);
-    }
-    fs::set_permissions(dest, meta.permissions()).map_err(io_err(dest))
+    let owner_ok = owner(&meta, dest)?;
+    fs::set_permissions(dest, meta.permissions()).map_err(io_err(dest))?;
+    handle.sync_all().map_err(io_err(dest))?;
+    Ok(owner_ok)
 }
 
 #[cfg(unix)]
 fn owner(meta: &fs::Metadata, dest: &Path) -> Result<bool, OutputError> {
     use std::os::unix::fs::MetadataExt;
     if crate::sys::is_root() {
-        std::os::unix::fs::chown(dest, Some(meta.uid()), Some(meta.gid())).map_err(io_err(dest))?;
-        return Ok(true);
+        return match std::os::unix::fs::chown(dest, Some(meta.uid()), Some(meta.gid())) {
+            Ok(()) => Ok(true),
+            // Filesystems without owners (vfat, some network mounts): warn instead of failing.
+            Err(e)
+                if matches!(
+                    e.raw_os_error(),
+                    Some(libc::EPERM | libc::EINVAL | libc::ENOTSUP)
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(e) => Err(io_err(dest)(e)),
+        };
     }
     Ok(meta.uid() == crate::sys::effective_uid())
 }
@@ -219,16 +201,4 @@ fn owner(meta: &fs::Metadata, dest: &Path) -> Result<bool, OutputError> {
 #[cfg(windows)]
 fn owner(_: &fs::Metadata, _: &Path) -> Result<bool, OutputError> {
     Ok(true)
-}
-
-#[cfg(unix)]
-fn sync_dir(dir: &Path) -> Result<(), OutputError> {
-    File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(io_err(dir))
-}
-
-#[cfg(windows)]
-fn sync_dir(_: &Path) -> Result<(), OutputError> {
-    Ok(())
 }

@@ -63,6 +63,9 @@ pub struct VerifyFailure {
 pub enum OutputError {
     #[error("{path} is not empty")]
     OutputNotEmpty { path: PathBuf },
+    /// The part of the output path that does not exist yet contains `..`.
+    #[error("{path} must not contain '..' after its existing part")]
+    InvalidOutputPath { path: PathBuf },
     #[error("{out} overlaps the world at {world}")]
     OutputOverlapsSource { out: PathBuf, world: PathBuf },
     #[error(transparent)]
@@ -121,7 +124,14 @@ pub fn run_gc(
     let mut forced = BTreeSet::new();
     let mut stops = Vec::new();
     let mut locks = Vec::new();
-    for folder in &layout.world_folders {
+    let mut folders: Vec<PathBuf> = layout
+        .world_folders
+        .iter()
+        .map(|f| fs::canonicalize(f).unwrap_or_else(|_| f.clone()))
+        .collect();
+    folders.sort();
+    folders.dedup();
+    for folder in &folders {
         match SessionLock::try_acquire(folder) {
             Ok(lock) => locks.push(lock),
             Err(LockError::Missing { .. }) => {
@@ -136,8 +146,8 @@ pub fn run_gc(
             Err(e) => return Err(OutputError::Lock(e)),
         }
     }
-    if layout.data_version.is_none_or(|v| v < DV_SESSION_LOCK_OS)
-        && let Some(v) = layout.data_version
+    if let Some(v) = layout.data_version
+        && v < DV_SESSION_LOCK_OS
     {
         observer.warn(Warning::PreLockVersion(v));
     }
@@ -223,6 +233,16 @@ fn check_output(layout: &WorldLayout, out: &Path) -> Result<PathBuf, OutputError
     let base = existing_ancestor(&absolute);
     let canonical_base = fs::canonicalize(&base).map_err(io_err(&base))?;
     let rest = absolute.strip_prefix(&base).unwrap_or(Path::new(""));
+    // `..` in a part that does not exist yet would be resolved only when it is
+    // created, so the overlap check below could not see where it leads.
+    if rest.components().any(|c| {
+        !matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    }) {
+        return Err(OutputError::InvalidOutputPath { path: absolute });
+    }
     let resolved = canonical_base.join(rest);
 
     match fs::read_dir(&resolved) {
@@ -232,8 +252,7 @@ fn check_output(layout: &WorldLayout, out: &Path) -> Result<PathBuf, OutputError
             }
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) if resolved.exists() && !resolved.is_dir() => {
-            let _ = e;
+        Err(_) if resolved.exists() && !resolved.is_dir() => {
             return Err(OutputError::OutputNotEmpty { path: resolved });
         }
         Err(e) => return Err(io_err(&resolved)(e)),
@@ -257,6 +276,25 @@ fn existing_ancestor(path: &Path) -> PathBuf {
         .find(|p| p.exists())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Files of the source that never go to the output: `session.lock` at a
+/// world folder root and the `.wgc/` records of an earlier run.
+pub(crate) fn is_excluded(layout: &WorldLayout, path: &Path) -> bool {
+    layout.world_folders.iter().any(|folder| {
+        path == folder.join(crate::lock::LOCK_FILE) || path.starts_with(folder.join(RECORD_DIR))
+    })
+}
+
+/// Makes the entries of `dir` durable.
+pub(crate) fn sync_dir(dir: &Path) -> Result<(), OutputError> {
+    #[cfg(unix)]
+    fs::File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(io_err(dir))?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 /// Where `source` (inside the world) goes in the output.

@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::{OutputError, RECORD_DIR, io_err};
+use super::{OutputError, RECORD_DIR, io_err, sync_dir};
 use crate::layout::{WorldFiles, WorldLayout};
 use crate::plan::Plan;
 use crate::report::{ReportError, rel_path};
@@ -120,16 +120,6 @@ impl SourceState {
         walked: &WorldFiles,
     ) -> Result<SourceState, OutputError> {
         let root = &layout.root;
-        let mut files = Vec::new();
-        for f in &walked.files {
-            let meta = fs::metadata(&f.path).map_err(io_err(&f.path))?;
-            files.push(SourceStateFile {
-                path: rel_path(root, &f.path).map_err(report_err)?,
-                size: meta.len(),
-                mtime_ns: mtime_ns(&meta),
-            });
-        }
-        files.sort();
         Ok(SourceState {
             schema: "wgc.source-state/1".to_owned(),
             source: root
@@ -143,7 +133,16 @@ impl SourceState {
                 .map(|f| rel_path(root, f))
                 .collect::<Result<_, _>>()
                 .map_err(report_err)?,
-            files,
+            files: stat_files(root, walked)?,
+        })
+    }
+
+    /// The same record, with the files as they are now.
+    pub(crate) fn recapture(&self) -> Result<SourceState, OutputError> {
+        let walked = crate::layout::files_in(&self.world_folder_paths())?;
+        Ok(SourceState {
+            files: stat_files(Path::new(&self.source), &walked)?,
+            ..self.clone()
         })
     }
 
@@ -188,6 +187,21 @@ impl SourceState {
     }
 }
 
+/// Path, size and modification time of every walked file, sorted.
+fn stat_files(root: &Path, walked: &WorldFiles) -> Result<Vec<SourceStateFile>, OutputError> {
+    let mut files = Vec::new();
+    for f in &walked.files {
+        let meta = fs::metadata(&f.path).map_err(io_err(&f.path))?;
+        files.push(SourceStateFile {
+            path: rel_path(root, &f.path).map_err(report_err)?,
+            size: meta.len(),
+            mtime_ns: mtime_ns(&meta),
+        });
+    }
+    files.sort();
+    Ok(files)
+}
+
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), OutputError> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|e| OutputError::Io {
         path: path.to_path_buf(),
@@ -196,15 +210,6 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), OutputError> {
     let mut f = File::create(path).map_err(io_err(path))?;
     f.write_all(&bytes).map_err(io_err(path))?;
     f.sync_all().map_err(io_err(path))
-}
-
-fn sync_dir(dir: &Path) -> Result<(), OutputError> {
-    #[cfg(unix)]
-    File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(io_err(dir))?;
-    let _ = dir;
-    Ok(())
 }
 
 /// Writes `source-state.json`, then `complete.json` last.
@@ -241,9 +246,12 @@ pub(crate) fn write_records(
     summary.size_before += plan.estimate.other_files_bytes;
     summary.size_after += plan.estimate.other_files_bytes;
 
+    // Everything else is durable before the marker appears.
     sync_dir(&dir)?;
+    sync_dir(out)?;
+    let tmp = dir.join("complete.json.tmp");
     write_json(
-        &dir.join("complete.json"),
+        &tmp,
         &Complete {
             schema: "wgc.complete/1".to_owned(),
             tool_version: crate::TOOL_VERSION.to_owned(),
@@ -253,8 +261,15 @@ pub(crate) fn write_records(
             forced: forced.iter().map(|g| g.as_str().to_owned()).collect(),
         },
     )?;
-    sync_dir(&dir)?;
-    sync_dir(out)
+    // The rename makes the marker appear complete or not at all.
+    let complete = dir.join("complete.json");
+    fs::rename(&tmp, &complete).map_err(io_err(&complete))?;
+    if let Err(e) = sync_dir(&dir) {
+        // Not durable: do not leave a marker for a run that reports failure.
+        let _ = fs::remove_file(&complete);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Writes `failure.json` describing why the output is incomplete.

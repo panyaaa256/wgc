@@ -287,3 +287,67 @@ fn verify_detects_changes_locks_and_incomplete_outputs() {
         Err(VerifyError::Incomplete { .. })
     ));
 }
+
+#[test]
+fn records_of_an_earlier_run_are_not_copied() {
+    let w = world();
+    write(&w.path().join(".wgc/complete.json"), b"{}");
+    write(&w.path().join(".wgc/source-state.json"), b"{}");
+    let o = tempfile::tempdir().unwrap();
+    let out = o.path().join("out");
+
+    // Cancelled during writing: no stale complete.json may appear in the output.
+    let cancel = AtomicBool::new(false);
+    let hook = Hook {
+        on: |p: &Progress| {
+            if matches!(p, Progress::Writing { .. }) {
+                cancel.store(true, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        },
+        fired: Mutex::new(false),
+    };
+    let layout = crate::layout::detect(w.path()).unwrap();
+    assert!(matches!(
+        run_gc(&layout, &options(&out), &hook, &cancel),
+        Err(OutputError::Cancelled)
+    ));
+    assert!(!out.join(".wgc/complete.json").exists());
+    assert!(matches!(
+        verify(&out, None),
+        Err(VerifyError::Incomplete { .. })
+    ));
+
+    // A full run writes its own records only.
+    let out2 = o.path().join("out2");
+    run(w.path(), &out2).unwrap();
+    let complete = std::fs::read_to_string(out2.join(".wgc/complete.json")).unwrap();
+    assert!(complete.contains("wgc.complete/1"));
+}
+
+#[test]
+fn dot_dot_after_the_existing_part_is_refused() {
+    let w = world();
+    let o = tempfile::tempdir().unwrap();
+    let sneaky = o.path().join("missing/../../escape");
+    assert!(matches!(
+        run(w.path(), &sneaky),
+        Err(OutputError::InvalidOutputPath { .. })
+    ));
+    assert!(!o.path().join("missing").exists());
+}
+
+#[test]
+fn failure_json_makes_verify_incomplete() {
+    let w = world();
+    let o = tempfile::tempdir().unwrap();
+    let out = o.path().join("out");
+    run(w.path(), &out).unwrap();
+    write(&out.join(".wgc/failure.json"), b"{}");
+    assert!(matches!(
+        verify(&out, None),
+        Err(VerifyError::Incomplete { .. })
+    ));
+}

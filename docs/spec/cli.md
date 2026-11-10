@@ -61,7 +61,7 @@ wgc --help
 | `LayoutError`（すべて） | 4 |
 | `LockError::InUse`、`NotWritable` | 3 |
 | `LockError::Io` | 4 |
-| `OutputError::OutputNotEmpty`、`OutputOverlapsSource`、`Stopped`、`InsufficientSpace` | 3 |
+| `OutputError::OutputNotEmpty`、`InvalidOutputPath`、`OutputOverlapsSource`、`Stopped`、`InsufficientSpace` | 3 |
 | `OutputError::Verification` | 5 |
 | `OutputError::Io`、`Plan(PlanError::Io)` | 4 |
 | `OutputError::Cancelled`、`PlanError::Cancelled` | 130 |
