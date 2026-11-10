@@ -94,6 +94,12 @@ impl StructuralId {
     }
 }
 
+impl serde::Serialize for StructuralId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
 impl fmt::Display for StructuralId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())

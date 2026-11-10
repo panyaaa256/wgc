@@ -221,6 +221,12 @@ impl fmt::Display for GuardId {
     }
 }
 
+impl serde::Serialize for GuardId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
 impl FromStr for GuardId {
     type Err = GuardIdError;
 

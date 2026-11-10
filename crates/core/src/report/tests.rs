@@ -179,6 +179,28 @@ fn gc_report_adds_its_fields() {
     assert_eq!(v["forced"], serde_json::json!(["T-3"]));
     assert_eq!(v["dimensions_targeted"], Value::Null);
     assert_eq!(v["dimensions"][0]["id"], "minecraft:overworld");
+    assert!(
+        !v["notices"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("no_trash"))
+    );
+
+    let scan = scan_report(&plan, &check_trust(&plan), LockStatus::Acquired).unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let gc = gc_report(scan, Some(&out.path().join(".")), &BTreeSet::new(), &plan).unwrap();
+    let v = serde_json::to_value(&gc).unwrap();
+    assert_eq!(v["mode"], "output");
+    assert_eq!(
+        v["out"],
+        std::fs::canonicalize(out.path()).unwrap().to_str().unwrap()
+    );
+    assert!(
+        v["notices"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("no_trash"))
+    );
 }
 
 #[test]
@@ -192,6 +214,10 @@ fn relative_paths() {
     assert_eq!(
         rel_path(root, Path::new("/elsewhere/x")).unwrap(),
         "/elsewhere/x"
+    );
+    assert_eq!(
+        rel_path(root, Path::new("/srv/mcx/y")).unwrap(),
+        "/srv/mcx/y"
     );
 }
 

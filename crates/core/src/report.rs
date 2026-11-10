@@ -16,7 +16,7 @@ use crate::plan::{
     Decision, EntryFate, FileAction, Inhabited, KeepReason, OmitReason, Plan, PlanError,
     PlanOptions, RemoveReason, build_plan,
 };
-use crate::region::ContentError;
+use crate::region::{ContentError, StructuralId};
 use crate::trust::{CheckStatus, TrustDetail, TrustReport, check_trust};
 use crate::types::{ChunkPos, FileKind, GuardId, Observer, UnknownReason, Warning};
 
@@ -105,11 +105,20 @@ pub struct LayoutReport {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TrustItem {
     pub id: GuardId,
-    pub status: &'static str,
+    pub status: TrustStatus,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub details: Vec<DetailJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<ReasonJson>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustStatus {
+    Pass,
+    Fail,
+    Unknown,
+    NotApplicable,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -148,7 +157,15 @@ pub struct OtherFiles {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OmittedJson {
     pub path: String,
-    pub reason: &'static str,
+    pub reason: OmitJson,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OmitJson {
+    EmptyFile,
+    NoEntriesLeft,
+    PlayerTempFile,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -239,15 +256,22 @@ pub struct Integrity {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StructuralJson {
     pub path: String,
-    pub id: &'static str,
+    pub id: StructuralId,
     pub index: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ContentJson {
     pub pos: [i32; 2],
-    pub kind: &'static str,
+    pub kind: ContentKind,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentKind {
+    Decompress,
+    Nbt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
@@ -291,8 +315,7 @@ pub fn scan_report(
 ) -> Result<ScanReport, ReportError> {
     let root = &plan.layout.root;
     let rel = |p: &Path| rel_path(root, p);
-    let rels =
-        |ps: &mut dyn Iterator<Item = &PathBuf>| ps.map(|p| rel(p)).collect::<Result<Vec<_>, _>>();
+    let rels = |ps: &[PathBuf]| ps.iter().map(|p| rel(p)).collect::<Result<Vec<_>, _>>();
 
     let mut dimensions = Vec::new();
     let mut any_deleted = false;
@@ -318,7 +341,7 @@ pub fn scan_report(
         layout: LayoutReport {
             kind: plan.layout.kind.as_str(),
             base: plan.layout.base.clone(),
-            world_folders: rels(&mut plan.layout.world_folders.iter())?,
+            world_folders: rels(&plan.layout.world_folders)?,
         },
         world_data_version: plan.layout.data_version.map(|v| v.0),
         lock,
@@ -338,7 +361,7 @@ pub fn scan_report(
                     })
                 })
                 .collect::<Result<_, ReportError>>()?,
-            dat_old_without_dat: rels(&mut plan.dat_old_without_dat.iter())?,
+            dat_old_without_dat: rels(&plan.dat_old_without_dat)?,
         },
         notices,
         dimensions,
@@ -382,13 +405,13 @@ fn dimension_report(
             integrity.verbatim_triples.push([t.pos.x, t.pos.z]);
         }
         for issue in &t.issues {
-            let path = t
+            let path = &t
                 .file(issue.kind)
-                .map(|f| f.path.as_path())
-                .unwrap_or(Path::new(""));
+                .expect("a structural issue belongs to a file of the triple")
+                .path;
             integrity.structural.push(StructuralJson {
                 path: rel(path)?,
-                id: issue.id.as_str(),
+                id: issue.id,
                 index: issue.index.map(|i| i.get()),
             });
         }
@@ -410,8 +433,8 @@ fn dimension_report(
                 integrity.content.push(ContentJson {
                     pos: pos(c.pos),
                     kind: match e {
-                        ContentError::Decompress(_) => "decompress",
-                        ContentError::Nbt(_) => "nbt",
+                        ContentError::Decompress(_) => ContentKind::Decompress,
+                        ContentError::Nbt(_) => ContentKind::Nbt,
                     },
                     detail: e.to_string(),
                 });
@@ -471,6 +494,10 @@ fn dimension_report(
 }
 
 /// Turns a scan report into the `wgc gc` report.
+///
+/// Pass `out` only after the output was written and verified: the report
+/// then says `output` and carries the `no_trash` notice. `out` is
+/// canonicalized (made absolute if it cannot be resolved).
 pub fn gc_report(
     mut scan: ScanReport,
     out: Option<&Path>,
@@ -480,11 +507,17 @@ pub fn gc_report(
     scan.schema = "wgc.gc/1";
     let out = out
         .map(|p| {
-            p.to_str()
+            let full = std::fs::canonicalize(p)
+                .or_else(|_| std::path::absolute(p))
+                .unwrap_or_else(|_| p.to_path_buf());
+            full.to_str()
                 .map(str::to_owned)
-                .ok_or_else(|| ReportError::NonUtf8Path(p.to_path_buf()))
+                .ok_or(ReportError::NonUtf8Path(full.clone()))
         })
         .transpose()?;
+    if out.is_some() {
+        scan.notices.push(Notice::NoTrash);
+    }
     Ok(GcReport {
         scan,
         mode: if out.is_some() {
@@ -505,11 +538,11 @@ fn pos(p: ChunkPos) -> [i32; 2] {
     [p.x, p.z]
 }
 
-fn omit_reason(r: OmitReason) -> &'static str {
+fn omit_reason(r: OmitReason) -> OmitJson {
     match r {
-        OmitReason::EmptyFile => "empty_file",
-        OmitReason::NoEntriesLeft => "no_entries_left",
-        OmitReason::PlayerTempFile => "player_temp_file",
+        OmitReason::EmptyFile => OmitJson::EmptyFile,
+        OmitReason::NoEntriesLeft => OmitJson::NoEntriesLeft,
+        OmitReason::PlayerTempFile => OmitJson::PlayerTempFile,
     }
 }
 
@@ -519,10 +552,10 @@ fn trust_item(
     rel: &dyn Fn(&Path) -> Result<String, ReportError>,
 ) -> Result<TrustItem, ReportError> {
     let (name, details, reason) = match status {
-        CheckStatus::Pass => ("pass", Vec::new(), None),
-        CheckStatus::NotApplicable => ("not_applicable", Vec::new(), None),
+        CheckStatus::Pass => (TrustStatus::Pass, Vec::new(), None),
+        CheckStatus::NotApplicable => (TrustStatus::NotApplicable, Vec::new(), None),
         CheckStatus::Fail(details) => (
-            "fail",
+            TrustStatus::Fail,
             details
                 .iter()
                 .map(|d| {
@@ -553,7 +586,7 @@ fn trust_item(
             None,
         ),
         CheckStatus::Unknown(reason) => (
-            "unknown",
+            TrustStatus::Unknown,
             Vec::new(),
             Some(match reason {
                 UnknownReason::UnreadableFile { path } => {
@@ -585,28 +618,23 @@ fn trust_item(
 /// Paths outside `root` (e.g. the server defaults of a world folder input)
 /// are given as they are.
 pub fn rel_path(root: &Path, path: &Path) -> Result<String, ReportError> {
-    let relative = path.strip_prefix(root).unwrap_or(path);
+    let non_utf8 = || ReportError::NonUtf8Path(path.to_path_buf());
+    let Ok(relative) = path.strip_prefix(root) else {
+        return path.to_str().map(str::to_owned).ok_or_else(non_utf8);
+    };
     let mut parts = Vec::new();
     for component in relative.components() {
-        let part = match component {
-            Component::Normal(s) => s.to_str(),
-            Component::RootDir => Some(""),
-            Component::CurDir => continue,
-            Component::ParentDir => Some(".."),
-            Component::Prefix(p) => p.as_os_str().to_str(),
-        };
-        parts.push(part.ok_or_else(|| ReportError::NonUtf8Path(path.to_path_buf()))?);
+        match component {
+            Component::Normal(s) => parts.push(s.to_str().ok_or_else(non_utf8)?),
+            Component::CurDir => {}
+            // A path relative to root has no prefix, root or parent components.
+            other => parts.push(other.as_os_str().to_str().ok_or_else(non_utf8)?),
+        }
     }
     if parts.is_empty() {
         return Ok(".".to_owned());
     }
     Ok(parts.join("/"))
-}
-
-impl Serialize for GuardId {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
 }
 
 #[cfg(test)]
