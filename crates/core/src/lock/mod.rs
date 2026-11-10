@@ -7,9 +7,11 @@
 
 mod sys;
 
-use std::fs::{File, OpenOptions};
+use std::collections::BTreeSet;
+use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use crate::layout::WorldLayout;
 
@@ -28,6 +30,10 @@ pub enum LockError {
     /// `session.lock` cannot be opened for writing, which locking needs.
     #[error("{path} cannot be opened for writing")]
     NotWritable { path: PathBuf },
+    /// This process already holds the lock. Opening the file again could
+    /// release it (POSIX locks belong to the process), so it is refused.
+    #[error("{path} is already locked by this process")]
+    HeldByThisProcess { path: PathBuf },
     #[error("cannot lock {path}")]
     Io {
         path: PathBuf,
@@ -44,7 +50,22 @@ pub enum LockError {
 #[derive(Debug)]
 pub struct SessionLock {
     path: PathBuf,
-    _file: File,
+    file: Option<File>,
+}
+
+/// `session.lock` files this process holds, by canonical path.
+static HELD: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+
+fn held() -> std::sync::MutexGuard<'static, BTreeSet<PathBuf>> {
+    HELD.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Drop for SessionLock {
+    fn drop(&mut self) {
+        // Close (and so unlock) before allowing this process to open the file again.
+        drop(self.file.take());
+        held().remove(&self.path);
+    }
 }
 
 impl SessionLock {
@@ -53,7 +74,12 @@ impl SessionLock {
     /// The file is opened for reading and writing without creating or
     /// truncating it; its content is never changed.
     pub fn try_acquire(world_folder: &Path) -> Result<SessionLock, LockError> {
-        let path = world_folder.join(LOCK_FILE);
+        let folder = fs::canonicalize(world_folder).unwrap_or_else(|_| world_folder.to_path_buf());
+        let path = folder.join(LOCK_FILE);
+        let mut held = held();
+        if held.contains(&path) {
+            return Err(LockError::HeldByThisProcess { path });
+        }
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -67,14 +93,21 @@ impl SessionLock {
                 },
             })?;
         match sys::try_lock(&file) {
-            Ok(true) => Ok(SessionLock { path, _file: file }),
+            Ok(true) => {
+                held.insert(path.clone());
+                Ok(SessionLock {
+                    path,
+                    file: Some(file),
+                })
+            }
             Ok(false) => Err(LockError::InUse { path }),
             Err(source) => Err(LockError::Io { path, source }),
         }
     }
 
     /// Whether another process holds the lock. Releases it again right away.
-    /// A missing `session.lock` counts as not locked.
+    /// A missing `session.lock` counts as not locked. Fails with
+    /// [`LockError::HeldByThisProcess`] if this process holds it.
     pub fn is_locked(world_folder: &Path) -> Result<bool, LockError> {
         match Self::try_acquire(world_folder) {
             Ok(_) => Ok(false),
@@ -95,10 +128,17 @@ impl SessionLock {
 pub struct SessionLocks(Vec<SessionLock>);
 
 impl SessionLocks {
-    /// Locks all `world_folders` in order. On failure, the locks taken so far are released.
+    /// Locks all `world_folders` in order. Folders that resolve to the same
+    /// directory are locked once. On failure, the locks taken so far are released.
     pub fn try_acquire_all(layout: &WorldLayout) -> Result<SessionLocks, LockError> {
-        layout
+        let mut folders: Vec<PathBuf> = layout
             .world_folders
+            .iter()
+            .map(|f| fs::canonicalize(f).unwrap_or_else(|_| f.clone()))
+            .collect();
+        folders.sort();
+        folders.dedup();
+        folders
             .iter()
             .map(|folder| SessionLock::try_acquire(folder))
             .collect::<Result<Vec<_>, _>>()
@@ -149,6 +189,20 @@ mod tests {
     }
 
     #[test]
+    fn second_lock_in_the_same_process_is_refused() {
+        let t = world_with_lock();
+        let _lock = SessionLock::try_acquire(t.path()).unwrap();
+        assert!(matches!(
+            SessionLock::try_acquire(t.path()),
+            Err(LockError::HeldByThisProcess { .. })
+        ));
+        assert!(matches!(
+            SessionLock::is_locked(t.path()),
+            Err(LockError::HeldByThisProcess { .. })
+        ));
+    }
+
+    #[test]
     fn released_on_drop() {
         let t = world_with_lock();
         let lock = SessionLock::try_acquire(t.path()).unwrap();
@@ -189,9 +243,7 @@ public class Locker {
 
     fn answer(child: &mut std::process::Child) -> String {
         let mut line = String::new();
-        BufReader::new(child.stdout.as_mut().unwrap())
-            .read_line(&mut line)
-            .unwrap();
+        let _ = BufReader::new(child.stdout.as_mut().unwrap()).read_line(&mut line);
         line.trim().to_owned()
     }
 
@@ -210,7 +262,14 @@ public class Locker {
             eprintln!("java not found; skipping");
             return;
         };
-        assert_eq!(answer(&mut child), "locked");
+        // A `java` that cannot run single-file programs (stub, JRE, Java < 11) prints nothing.
+        let first = answer(&mut child);
+        if first.is_empty() {
+            let _ = child.kill();
+            eprintln!("java cannot run the test program; skipping");
+            return;
+        }
+        assert_eq!(first, "locked");
         assert!(matches!(
             SessionLock::try_acquire(world.path()),
             Err(LockError::InUse { .. })

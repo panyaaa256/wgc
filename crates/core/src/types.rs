@@ -239,6 +239,15 @@ pub enum Known<T> {
     Unknown(UnknownReason),
 }
 
+impl<T> From<Result<T, UnknownReason>> for Known<T> {
+    fn from(result: Result<T, UnknownReason>) -> Self {
+        match result {
+            Ok(v) => Known::Value(v),
+            Err(reason) => Known::Unknown(reason),
+        }
+    }
+}
+
 /// Why something could not be confirmed (docs/spec/trust.md).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnknownReason {

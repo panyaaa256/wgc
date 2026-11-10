@@ -58,7 +58,7 @@ fn files_26_1(layout: &WorldLayout) -> bool {
 ///
 /// A rule that is not stored has its default value, enabled.
 pub fn spawn_mobs(layout: &WorldLayout, dim: &Dimension) -> Known<bool> {
-    let result = (|| {
+    Known::from((|| {
         known_version(layout)?;
         let (path, value) = match layout.kind {
             LayoutKind::Bukkit => {
@@ -66,7 +66,10 @@ pub fn spawn_mobs(layout: &WorldLayout, dim: &Dimension) -> Known<bool> {
                 let value = read_optional(&path, nbt::read_game_rules_file)?;
                 (path, value.unwrap_or(RuleValue::Absent))
             }
-            LayoutKind::BukkitLegacy => level_rule(&dim.world_folder)?,
+            LayoutKind::BukkitLegacy if dim.world_folder != layout.main_world_folder => {
+                level_rule(&dim.world_folder)?
+            }
+            LayoutKind::BukkitLegacy => main_level_rule(layout),
             LayoutKind::Vanilla | LayoutKind::VanillaLegacy if files_26_1(layout) => {
                 let path = layout
                     .main_world_folder
@@ -74,9 +77,7 @@ pub fn spawn_mobs(layout: &WorldLayout, dim: &Dimension) -> Known<bool> {
                 let value = read_optional(&path, nbt::read_game_rules_file)?;
                 (path, value.unwrap_or(RuleValue::Absent))
             }
-            LayoutKind::Vanilla | LayoutKind::VanillaLegacy => {
-                level_rule(&layout.main_world_folder)?
-            }
+            LayoutKind::Vanilla | LayoutKind::VanillaLegacy => main_level_rule(layout),
         };
         match value {
             RuleValue::Absent => Ok(true),
@@ -86,11 +87,15 @@ pub fn spawn_mobs(layout: &WorldLayout, dim: &Dimension) -> Known<bool> {
                 key: "spawn_mobs".to_owned(),
             }),
         }
-    })();
-    match result {
-        Ok(v) => Known::Value(v),
-        Err(reason) => Known::Unknown(reason),
-    }
+    })())
+}
+
+/// The rule from the main `level.dat`, already read by [`super::detect`].
+fn main_level_rule(layout: &WorldLayout) -> (PathBuf, RuleValue) {
+    (
+        layout.main_world_folder.join("level.dat"),
+        layout.level_spawn_mobs,
+    )
 }
 
 fn level_rule(world_folder: &Path) -> Result<(PathBuf, RuleValue), UnknownReason> {
@@ -103,7 +108,7 @@ fn level_rule(world_folder: &Path) -> Result<(PathBuf, RuleValue), UnknownReason
 
 /// The `/forceload` chunks of `dim`.
 pub fn forced_chunks(layout: &WorldLayout, dim: &Dimension) -> Known<BTreeSet<ChunkPos>> {
-    let result = (|| {
+    Known::from((|| {
         known_version(layout)?;
         let new = dim.dir.join("data/minecraft/chunk_tickets.dat");
         let old = dim.dir.join("data/chunks.dat");
@@ -118,11 +123,7 @@ pub fn forced_chunks(layout: &WorldLayout, dim: &Dimension) -> Known<BTreeSet<Ch
             }
         }
         Ok(BTreeSet::new())
-    })();
-    match result {
-        Ok(v) => Known::Value(v),
-        Err(reason) => Known::Unknown(reason),
-    }
+    })())
 }
 
 /// The folder that holds `<uuid>.dat` player files.
@@ -275,6 +276,7 @@ mod tests {
     fn paths_by_layout() {
         let t = tempfile::tempdir().unwrap();
         let r = t.path();
+        write(&r.join("bukkit.yml"), b"");
         region(&r.join("world/dimensions/minecraft/overworld"), "r.0.0.mca");
         level(&r.join("world"), vec![("DataVersion", V::Int(5023))]);
         let l = detect(r).unwrap();

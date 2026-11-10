@@ -32,7 +32,7 @@ impl SessionLock {
 
 pub struct SessionLocks(Vec<SessionLock>);
 impl SessionLocks {
-    pub fn try_acquire_all(layout: &WorldLayout) -> Result<SessionLocks, LockError>; // world_folders の順
+    pub fn try_acquire_all(layout: &WorldLayout) -> Result<SessionLocks, LockError>; // 正規化して重複を除き、順にロック
 }
 ```
 
@@ -43,6 +43,7 @@ pub enum LockError {
     InUse { path: PathBuf },
     Missing { path: PathBuf },        // session.lock がない（L-1）
     NotWritable { path: PathBuf },    // 書き込みで開けない
+    HeldByThisProcess { path: PathBuf }, // このプロセスがすでに持っている（開き直すとロックが外れうるので拒否する）
     Io { path: PathBuf, source: io::Error },
 }
 ```

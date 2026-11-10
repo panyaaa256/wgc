@@ -10,7 +10,7 @@
 
 ### level-name
 
-ルートの `server.properties` の、コメントでない最初の `level-name=` の値（前後の空白を除く）。ファイルがない・読めない、値が空・`.`・`..`・`/` か `\` を含む場合は「指定なし」。
+ルートの `server.properties` で、前後の空白を除いて `level-name=` で始まる行のうち、使える値を持つ最初の行の値（前後の空白を除く）。値が空・`.`・`..`・`/` か `\` を含む行は飛ばす（sekai と同じ）。ファイルがない・読めない、使える行がない場合は「指定なし」。
 
 ### Bukkit の候補 `<base>`
 
@@ -30,7 +30,7 @@
 
 | ID | 条件 | エラー |
 |---|---|---|
-| W-1 | Bukkit（26.1 より前）と判定したが、`<base>/DIM-1` か `<base>/DIM1` がワールドのディレクトリで、`<base>_nether/DIM-1` も `<base>_the_end/DIM1` もそうでない | `LooksLikeVanillaServer { suggested: <root>/<base> }` |
+| W-1 | Bukkit（26.1 以降）と判定したが、ルートに `bukkit.yml` がない（Bukkit 系のサーバーは必ず作る）。または、Bukkit（26.1 より前）と判定したが、`<base>/DIM-1` か `<base>/DIM1` がワールドのディレクトリで、`<base>_nether/DIM-1` も `<base>_the_end/DIM1` もそうでない | `LooksLikeVanillaServer { suggested: <root>/<base> }` |
 | W-2 | バニラと判定したが、ルートに `paper-world.yml` がある、またはルートの親に `bukkit.yml` か `spigot.yml` がある | `LooksLikeBukkitWorldFolder` |
 
 ## ディメンションマップ
@@ -162,6 +162,7 @@ pub enum LayoutError {
     LooksLikeVanillaServer { suggested: PathBuf },   // W-1
     LooksLikeBukkitWorldFolder,                      // W-2
     AmbiguousRegion { first: PathBuf, second: PathBuf },
+    DuplicateDimension { first: PathBuf, second: PathBuf },   // Bukkit の兄弟フォルダに同じ ID のディメンション
     MissingLevelDat { path: PathBuf },
     UnreadableLevelDat { path: PathBuf, source: NbtError },
     Io { path: PathBuf, source: io::Error },

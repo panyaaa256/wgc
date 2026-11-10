@@ -295,11 +295,11 @@ pub fn read_forced_chunks(nbt: &[u8]) -> Result<BTreeSet<ChunkPos>, NbtError> {
 
 /// One ticket compound; returns its position if it is a `minecraft:forced` ticket.
 fn read_forced_ticket(r: &mut SliceReader<'_>) -> Result<Option<ChunkPos>, NbtError> {
-    let mut forced = false;
+    let mut ty = None; // Some(true) for a `minecraft:forced` ticket
     let mut pos = None;
     for_each_entry(r, |name, tag, r| match (name, tag) {
         (Some(b"type"), Tag::String) => {
-            forced = read_string_bytes(r)? == b"minecraft:forced";
+            ty = Some(read_string_bytes(r)? == b"minecraft:forced");
             Ok(true)
         }
         (Some(b"chunk_pos"), Tag::IntArray) => {
@@ -313,13 +313,14 @@ fn read_forced_ticket(r: &mut SliceReader<'_>) -> Result<Option<ChunkPos>, NbtEr
             pos = Some(ChunkPos::from_packed(r.read_i64_be()?));
             Ok(true)
         }
-        (Some(b"chunk_pos"), _) => Err(NbtError::Malformed),
+        (Some(b"type" | b"chunk_pos"), _) => Err(NbtError::Malformed),
         _ => Ok(false),
     })?;
-    match (forced, pos) {
-        (true, Some(pos)) => Ok(Some(pos)),
-        (true, None) => Err(NbtError::Malformed),
-        (false, _) => Ok(None),
+    match (ty, pos) {
+        (Some(true), Some(pos)) => Ok(Some(pos)),
+        (Some(false), Some(_)) => Ok(None),
+        // A ticket without a type or position cannot be classified.
+        _ => Err(NbtError::Malformed),
     }
 }
 
@@ -767,6 +768,22 @@ mod tests {
             )]),
         )]);
         assert_eq!(read_forced_chunks(&bad), Err(NbtError::Malformed));
+        let mistyped = doc(vec![(
+            "data",
+            V::Compound(vec![(
+                "tickets",
+                V::CompoundList(vec![vec![("type", V::Int(1)), ("chunk_pos", V::Long(0))]]),
+            )]),
+        )]);
+        assert_eq!(read_forced_chunks(&mistyped), Err(NbtError::Malformed));
+        let untyped = doc(vec![(
+            "data",
+            V::Compound(vec![(
+                "tickets",
+                V::CompoundList(vec![vec![("chunk_pos", V::Long(0))]]),
+            )]),
+        )]);
+        assert_eq!(read_forced_chunks(&untyped), Err(NbtError::Malformed));
         let empty = doc(vec![("data", V::Compound(vec![]))]);
         assert!(read_forced_chunks(&empty).unwrap().is_empty());
     }

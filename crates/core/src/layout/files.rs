@@ -54,13 +54,13 @@ impl DimensionFiles {
         }
     }
 
-    /// Chunks of `region` that have an external file of `kind`.
-    pub fn externals_in(&self, kind: FileKind, region: RegionPos) -> BTreeSet<ChunkPos> {
-        self.externals(kind)
-            .keys()
-            .copied()
-            .filter(|pos| pos.region() == region)
-            .collect()
+    /// Chunks with an external file of `kind`, grouped by region.
+    pub fn externals_by_region(&self, kind: FileKind) -> BTreeMap<RegionPos, BTreeSet<ChunkPos>> {
+        let mut map: BTreeMap<RegionPos, BTreeSet<ChunkPos>> = BTreeMap::new();
+        for pos in self.externals(kind).keys() {
+            map.entry(pos.region()).or_default().insert(*pos);
+        }
+        map
     }
 
     fn externals_mut(&mut self, kind: FileKind) -> &mut BTreeMap<ChunkPos, PathBuf> {
@@ -168,13 +168,11 @@ mod tests {
         let origin = &files.triples[1];
         assert!(origin.region.is_some() && origin.entities.is_some() && origin.poi.is_none());
         assert_eq!(
-            files.externals_in(FileKind::Region, RegionPos::new(-1, 0)),
-            BTreeSet::from([ChunkPos::new(-1, 3)])
-        );
-        assert!(
-            files
-                .externals_in(FileKind::Region, RegionPos::new(0, 0))
-                .is_empty()
+            files.externals_by_region(FileKind::Region),
+            BTreeMap::from([(
+                RegionPos::new(-1, 0),
+                BTreeSet::from([ChunkPos::new(-1, 3)])
+            )])
         );
     }
 

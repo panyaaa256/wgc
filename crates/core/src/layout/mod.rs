@@ -11,7 +11,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::nbt::NbtError;
+use crate::nbt::{NbtError, RuleValue};
 use crate::region::parse_region_name;
 use crate::types::{DataVersion, DimensionId, FileKind};
 
@@ -74,6 +74,8 @@ pub struct WorldLayout {
     pub server_root: Option<PathBuf>,
     /// `Data.DataVersion` of the main `level.dat`.
     pub data_version: Option<DataVersion>,
+    /// The mob spawning rule stored in the main `level.dat` (before 4772).
+    pub level_spawn_mobs: RuleValue,
     /// Sorted by ID.
     pub dimensions: Vec<Dimension>,
 }
@@ -91,6 +93,8 @@ pub enum LayoutError {
     LooksLikeBukkitWorldFolder,
     #[error("{first} and {second} name the same region")]
     AmbiguousRegion { first: PathBuf, second: PathBuf },
+    #[error("{first} and {second} are the same dimension")]
+    DuplicateDimension { first: PathBuf, second: PathBuf },
     #[error("level.dat not found at {path}")]
     MissingLevelDat { path: PathBuf },
     #[error("cannot read {path}")]
@@ -143,6 +147,7 @@ pub fn detect(path: &Path) -> Result<WorldLayout, LayoutError> {
         main_world_folder,
         world_folders,
         data_version: level.data_version,
+        level_spawn_mobs: level.spawn_mobs,
         dimensions: dims.into_values().collect(),
     })
 }
@@ -160,6 +165,13 @@ fn classify(root: &Path) -> Result<(LayoutKind, Option<String>), LayoutError> {
     for base in bukkit_bases(root)? {
         let base_dir = root.join(&base);
         if any_world_dir(&trio(&base_dir))? {
+            // W-1 for 26.1: a vanilla server root has the same shape; Bukkit-based
+            // servers always create bukkit.yml in the server root.
+            if !root.join("bukkit.yml").is_file() {
+                return Err(LayoutError::LooksLikeVanillaServer {
+                    suggested: base_dir,
+                });
+            }
             return Ok((LayoutKind::Bukkit, Some(base)));
         }
         let nether = root.join(format!("{base}_nether")).join("DIM-1");
@@ -253,7 +265,15 @@ fn is_world_dir(dir: &Path) -> Result<bool, LayoutError> {
         Err(e) => return Err(LayoutError::io(dir, e)),
     }
     for kind in FileKind::ALL {
-        for entry in read_dir_opt(&dir.join(kind.dir_name()))? {
+        let kind_dir = dir.join(kind.dir_name());
+        let entries = match fs::read_dir(&kind_dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(LayoutError::io(&kind_dir, e)),
+        };
+        // Stop at the first region file instead of listing the whole folder.
+        for entry in entries {
+            let entry = entry.map_err(|e| LayoutError::io(&kind_dir, e))?;
             let is_region = entry
                 .file_name()
                 .to_str()
@@ -371,14 +391,18 @@ fn collect_tree(
             };
             // Directory names that are not valid IDs are not dimensions the game loads.
             if let Ok(id) = DimensionId::parse(&format!("{n}:{m}")) {
-                dims.insert(
-                    id.clone(),
-                    Dimension {
-                        id,
-                        dir: name.path(),
-                        world_folder: world_folder.to_path_buf(),
-                    },
-                );
+                let dim = Dimension {
+                    id: id.clone(),
+                    dir: name.path(),
+                    world_folder: world_folder.to_path_buf(),
+                };
+                if let Some(first) = dims.insert(id, dim) {
+                    // Two Bukkit sibling folders holding the same datapack dimension.
+                    return Err(LayoutError::DuplicateDimension {
+                        first: first.dir,
+                        second: name.path(),
+                    });
+                }
             }
         }
     }
@@ -507,6 +531,7 @@ mod tests {
     fn bukkit_26_1_without_level_name() {
         let t = tmp();
         let r = t.path();
+        write(&r.join("bukkit.yml"), b"");
         region(
             &r.join("world/dimensions/minecraft/the_nether"),
             "r.0.0.mca",
@@ -544,6 +569,33 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn w1_vanilla_26_1_server_root() {
+        let t = tmp();
+        let r = t.path();
+        write(&r.join("server.properties"), b"level-name=world\n");
+        region(&r.join("world/dimensions/minecraft/overworld"), "r.0.0.mca");
+        assert!(matches!(
+            detect(r),
+            Err(LayoutError::LooksLikeVanillaServer { .. })
+        ));
+    }
+
+    #[test]
+    fn duplicate_datapack_dimension_is_an_error() {
+        let t = tmp();
+        let r = t.path();
+        write(&r.join("server.properties"), b"level-name=world\n");
+        region(&r.join("world"), "r.0.0.mca");
+        level_dat(&r.join("world"), 4325);
+        region(&r.join("world_a/dimensions/pack/sky"), "r.0.0.mca");
+        region(&r.join("world_b/dimensions/pack/sky"), "r.0.0.mca");
+        assert!(matches!(
+            detect(r),
+            Err(LayoutError::DuplicateDimension { .. })
+        ));
     }
 
     #[test]
