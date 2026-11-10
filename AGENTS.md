@@ -21,3 +21,12 @@ Prior to generating, refactoring, or reviewing code, strictly follow the specifi
 - Respect crate boundaries inside `crates/*` and adhere strictly to the unidirectional dependency flow defined in `docs/spec.md` (`cli` -> `core`).
 - Never use `unwrap()`, `expect()`, or `panic!` in non-test library code.
 - Write code comments, rustdoc, and commit messages in English. The specifications under `docs/` are written in Japanese.
+
+# Commit Directives
+
+- Write commit messages in the [Conventional Commits](https://www.conventionalcommits.org/) format: `<type>[optional scope]: <description>`.
+  - **Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+  - **Scope**: the affected area, such as a crate or module (`core`, `cli`, `region`, `output`, `spec`).
+  - **Description**: imperative mood, present tense, under 72 characters.
+  - Mark a breaking change with `!` after the type or scope, or with a `BREAKING CHANGE:` footer.
+- Keep one logical change per commit.
