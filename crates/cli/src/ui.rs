@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use wgc_core::layout::{LayoutKind, WorldLayout};
 use wgc_core::report::{DimensionReport, LockStatus, ScanReport, TrustStatus};
-use wgc_core::types::{Observer, Progress, Warning, short_dimension_id};
+use wgc_core::types::{GuardId, Observer, Progress, Warning, short_dimension_id};
 
 use crate::messages;
 
@@ -482,6 +482,9 @@ pub fn summary(
         if let Some(reason) = &item.reason {
             writeln!(out, "    {}", style.dim(&messages::reason(reason)))?;
         }
+    }
+    if r.lock == LockStatus::Missing {
+        stopping.push(GuardId::L1.as_str());
     }
     if !stopping.is_empty() && kind != SummaryKind::Output {
         writeln!(

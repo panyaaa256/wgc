@@ -14,6 +14,7 @@ use crate::region::{ContentError, HEADER_BYTES, SECTOR_BYTES, StructuralIssue};
 use crate::types::{ChunkIndex, ChunkPos, DataVersion, DimensionId, FileKind, RegionPos};
 
 pub use build::build_plan;
+pub(crate) use build::read_inhabited;
 
 /// Options for [`build_plan`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

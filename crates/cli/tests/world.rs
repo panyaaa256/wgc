@@ -322,3 +322,13 @@ fn scan_lock_warning_names_the_cause() {
     assert!(stderr(&r).contains("is missing, so a running game cannot be detected"));
     assert!(!stderr(&r).contains("is in use"));
 }
+
+#[test]
+fn estimate_lists_l1_among_the_stops_of_gc_out() {
+    let w = world();
+    std::fs::remove_file(w.path().join("session.lock")).unwrap();
+    let r = wgc(&["gc", s(w.path())]);
+    let summary = String::from_utf8_lossy(&r.stdout);
+    assert!(summary.contains("--force=T-3,L-1"), "{summary}");
+    assert_eq!(wgc(&["gc", s(w.path()), "--strict"]).status.code(), Some(1));
+}

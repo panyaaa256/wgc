@@ -6,7 +6,16 @@ GC は「InhabitedTime が 0 なら、スペクテイター以外のプレイヤ
 
 ```rust
 pub fn check_trust(plan: &Plan) -> TrustReport;
+// Plan を使わずに T-1〜T-5 を確かめる。gc --out が、すべてのリージョンファイルを読む前に使う
+pub fn check_trust_before_plan(layout: &WorldLayout, gc_dims: Option<&BTreeSet<DimensionId>>, skip_t3: bool) -> TrustReport;
 ```
+
+`check_trust_before_plan` は、Plan の代わりに次のものを直接読む。どちらも Plan と同じ処理で読むので、ファイルが変わらない限り `check_trust` と同じ結果になる。
+
+- T-3: プレイヤーのいるチャンクを含むリージョンファイル（と外部の `.mcc`）だけ。各ファイルは一度だけ全体を読み、Plan と同じ解析で InhabitedTime を求める（展開するのはプレイヤーのいるチャンクだけ）。読めなければ「確認できない」
+- T-5: 対象のディメンションの強制読み込みチャンクの情報（Plan の `protection_unknown` の代わり）
+
+`skip_t3` のときは、T-3 のために何も読まず、結果から T-3 を除く。`gc --out` は、`--force` で T-3 が許されているときにこれを使う。許された T-3 では止まらないので、早く確かめる意味がない。T-3 を無視したかどうか（`forced` に入れるか）は、Plan に対する `check_trust` の結果で決める。
 
 読めないファイルはエラーにせず、その確認を「確認できない」にする。
 
@@ -74,7 +83,7 @@ Plan の `protection_unknown` に対象のディメンションがあれば「�
 
 ```rust
 pub struct TrustReport {
-    pub checks: Vec<CheckResult>,              // T-1..T-5 の順
+    pub checks: Vec<CheckResult>,              // T-1..T-5 の順（skip_t3 のときは T-3 がない）
 }
 
 pub struct CheckResult {
@@ -109,7 +118,7 @@ pub enum UnknownReason {
 ## 判定の使い方
 
 - `scan` と見積もり: すべて表示し、中止しない。
-- `gc --out`: 不合格か「確認できない」が1つでもあれば、何も書かずに中止する（`OutputError::Stopped`）。`--force` で無視を許された ID だけは続行し、`Warning::Forced(id)` を出して `complete.json` の `forced` に記録する。T-5 を無視すると強制読み込みの保護がないまま削除する。
+- `gc --out`: 不合格か「確認できない」が1つでもあれば、何も書かずに中止する（`OutputError::Stopped`）。すべてのリージョンファイルを読む前に `check_trust_before_plan` で確かめ、L-1 とまとめて中止する（output.md「実行の順序」）。`--force` で無視を許された ID だけは続行し、`Warning::Forced(id)` を出して `complete.json` の `forced` に記録する。T-5 を無視すると強制読み込みの保護がないまま削除する。
 
 ## 受け入れ条件
 
@@ -118,3 +127,6 @@ pub enum UnknownReason {
 - T-3: スペクテイター、存在しないチャンク、マップにないディメンション、負の値が飛ばされる。0 のチャンクにいるプレイヤーが 1 人で不合格、0 人で「確認できない」。`Dimension` の Int と String、`Data.Player` を扱える。
 - `--dimension minecraft:the_end` のとき、オーバーワールドのプレイヤーや強制読み込みの情報では止まらない。
 - `gc --out` が、不合格か「確認できない」で中止し、許された ID だけ続行して `forced` に記録する。
+- `check_trust_before_plan` と `check_trust` の結果が同じになる（`--dimension` の指定、外部の `.mcc` にあるチャンクを含む）。
+- `gc --out` が、T-1〜T-5、L-1 の停止では、すべてのリージョンファイルを読む前に中止する。
+- `--force` で T-3 が許されているとき、`gc --out` は Plan の前に T-3 のための読み込みをしない。T-3 が Plan に対して合格すれば `forced` に入らない。

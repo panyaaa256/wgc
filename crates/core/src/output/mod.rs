@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::layout::{LayoutError, WorldLayout};
 use crate::lock::{LockError, SessionLock};
 use crate::plan::{Plan, PlanError, PlanOptions, build_plan};
-use crate::trust::{TrustReport, check_trust};
+use crate::trust::{TrustReport, check_trust, check_trust_before_plan};
 use crate::types::{DimensionId, GuardId, Observer, Warning};
 use crate::versions::DV_SESSION_LOCK_OS;
 
@@ -125,7 +125,7 @@ pub fn run_gc(
 
     // 2. Locks.
     let mut forced = BTreeSet::new();
-    let mut stops = Vec::new();
+    let mut stops = BTreeSet::new();
     let mut locks = Vec::new();
     let mut folders: Vec<PathBuf> = layout
         .world_folders
@@ -138,28 +138,28 @@ pub fn run_gc(
         match SessionLock::try_acquire(folder) {
             Ok(lock) => locks.push(lock),
             Err(LockError::Missing { .. }) => {
-                if options.allowed.contains(&GuardId::L1) {
-                    if forced.insert(GuardId::L1) {
-                        observer.warn(Warning::LockSkipped);
-                    }
-                } else if !stops.contains(&GuardId::L1) {
-                    stops.push(GuardId::L1);
-                }
+                stops.insert(GuardId::L1);
             }
             Err(e) => return Err(OutputError::Lock(e)),
         }
     }
+
+    // 3. Trust checks before the long read of step 5, so that every stop
+    // `--force` can continue past is known before it.
+    let skip_t3 = options.allowed.contains(&GuardId::T3);
+    stops.extend(check_trust_before_plan(layout, options.gc_dims.as_ref(), skip_t3).stops());
+    apply_force(stops, &options.allowed, &mut forced, observer)?;
     if let Some(v) = layout.data_version
         && v < DV_SESSION_LOCK_OS
     {
         observer.warn(Warning::PreLockVersion(v));
     }
 
-    // 3. Source state, under the lock.
+    // 4. Source state, under the lock.
     let walked = crate::layout::world_files(layout)?;
     let state = record::SourceState::capture(layout, &walked)?;
 
-    // 4. Plan.
+    // 5. Plan.
     let plan = build_plan(
         layout,
         &PlanOptions {
@@ -169,22 +169,17 @@ pub fn run_gc(
         cancel,
     )?;
 
-    // 5. Trust.
+    // 6. The same checks against the plan. They match step 3 unless a file
+    // changed meanwhile, e.g. under a running game when L-1 was forced.
     let trust = check_trust(&plan);
-    for id in trust.stops() {
-        if options.allowed.contains(&id) {
-            forced.insert(id);
-            observer.warn(Warning::Forced(id));
-        } else {
-            stops.push(id);
-        }
-    }
-    if !stops.is_empty() {
-        stops.sort();
-        return Err(OutputError::Stopped(stops));
-    }
+    let new_stops = trust
+        .stops()
+        .into_iter()
+        .filter(|id| !forced.contains(id))
+        .collect();
+    apply_force(new_stops, &options.allowed, &mut forced, observer)?;
 
-    // 6. Free space.
+    // 7. Free space.
     let needed = plan
         .estimate
         .total_output_bytes
@@ -199,7 +194,7 @@ pub fn run_gc(
         return Err(OutputError::Cancelled);
     }
 
-    // 7-9. Write, verify, record. A failure leaves `failure.json` behind.
+    // 8-10. Write, verify, record. A failure leaves `failure.json` behind.
     fs::create_dir_all(&out).map_err(io_err(&out))?;
     let result = (|| {
         let written = copy::write_output(&plan, &walked, &out, observer, cancel)
@@ -229,6 +224,29 @@ pub fn run_gc(
         out,
         owner_not_preserved: written.owner_not_preserved,
     })
+}
+
+/// Stops with every stop that `--force` did not allow. Otherwise records the
+/// allowed ones as forced and warns about each.
+fn apply_force(
+    stops: BTreeSet<GuardId>,
+    allowed: &BTreeSet<GuardId>,
+    forced: &mut BTreeSet<GuardId>,
+    observer: &dyn Observer,
+) -> Result<(), OutputError> {
+    let (ignored, stopping): (BTreeSet<_>, BTreeSet<_>) =
+        stops.into_iter().partition(|id| allowed.contains(id));
+    if !stopping.is_empty() {
+        return Err(OutputError::Stopped(stopping.into_iter().collect()));
+    }
+    for id in ignored {
+        forced.insert(id);
+        observer.warn(match id {
+            GuardId::L1 => Warning::LockSkipped,
+            _ => Warning::Forced(id),
+        });
+    }
+    Ok(())
 }
 
 /// Checks that `out` is new or empty and does not overlap the world.
