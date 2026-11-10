@@ -140,6 +140,40 @@ fn forceload_protects_two_rings() {
 }
 
 #[test]
+fn chunks_kept_by_forceload_protect_their_structure_starts() {
+    // Chunk (1,0) is kept by forceload around (0,0) and references (9,0).
+    let referrer = chunk(1, 2, &zlib(&nbt(Some(V::Long(0)), &[(9, 0)], false)));
+    let t = world(&[("region/r.0.0.mca", build(&[c(0, 0), referrer, c(9, 0)]))]);
+    let forced = doc(vec![(
+        "data",
+        V::Compound(vec![("Forced", V::LongArray(vec![pack(0, 0)]))]),
+    )]);
+    write(&t.path().join("data/chunks.dat"), &gzip(&forced));
+    let d = decisions(&plan(t.path()));
+    assert_eq!(
+        d[&ChunkPos::new(1, 0)],
+        Decision::Keep(KeepReason::Forceload)
+    );
+    assert_eq!(
+        d[&ChunkPos::new(9, 0)],
+        Decision::Keep(KeepReason::StructureRef)
+    );
+}
+
+#[test]
+fn orphan_mcc_and_nested_session_lock_count_as_other_files() {
+    let t = world(&[
+        ("region/r.0.0.mca", build(&[c(0, 5)])),
+        ("entities/c.5.5.mcc", vec![0; 50]),
+        ("backups/session.lock", vec![0; 7]),
+    ]);
+    std::fs::write(t.path().join("session.lock"), "x").unwrap();
+    let p = plan(t.path());
+    let level_dat = std::fs::metadata(t.path().join("level.dat")).unwrap().len();
+    assert_eq!(p.estimate.other_files_bytes, level_dat + 50 + 7);
+}
+
+#[test]
 fn unreadable_forced_chunks_are_recorded() {
     let t = world(&[("region/r.0.0.mca", build(&[c(0, 0)]))]);
     write(&t.path().join("data/chunks.dat"), b"broken");

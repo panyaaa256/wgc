@@ -120,6 +120,11 @@ pub enum ContentError {
     Nbt(#[from] crate::nbt::NbtError),
 }
 
+/// Sectors a payload with length field `length` occupies when packed by [`write_region`].
+pub const fn packed_sectors(length: u32) -> usize {
+    (4 + length as usize).div_ceil(SECTOR_BYTES)
+}
+
 /// A chunk slot whose payload lies inside the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Entry {
@@ -146,7 +151,7 @@ impl Entry {
 
     /// Number of sectors the payload needs when packed.
     pub const fn packed_sectors(&self) -> usize {
-        self.payload_len().div_ceil(SECTOR_BYTES)
+        packed_sectors(self.length)
     }
 
     fn payload_start(&self) -> usize {

@@ -3,7 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use rayon::prelude::*;
 
@@ -20,20 +21,21 @@ pub fn build_plan(
     observer: &dyn Observer,
     cancel: &AtomicBool,
 ) -> Result<Plan, PlanError> {
-    let targeted = |id: &DimensionId| options.gc_dims.as_ref().is_none_or(|d| d.contains(id));
-
     // Enumerate first so that progress has a total.
     let mut listed = Vec::new();
     for dim in &layout.dimensions {
         listed.push((dim, layout::list_dimension_files(dim)?));
     }
     let total: u64 = listed.iter().map(|(_, f)| f.triples.len() as u64).sum();
-    let done = AtomicU64::new(0);
+    // Counting and reporting under one lock keeps `done` increasing for the observer.
+    let done = Mutex::new(0u64);
     observer.progress(Progress::Reading { done: 0, total });
 
     let mut dimensions = Vec::new();
     let mut protection_unknown = BTreeSet::new();
     for (dim, files) in &listed {
+        let externals = [FileKind::Region, FileKind::Entities, FileKind::Poi]
+            .map(|kind| externals_by_region(files, kind));
         // Stage A: per triple, in parallel.
         let mut analyses: Vec<Analysis> = files
             .triples
@@ -42,16 +44,17 @@ pub fn build_plan(
                 if cancel.load(Ordering::Relaxed) {
                     return Err(PlanError::Cancelled);
                 }
-                let analysis = analyze(triple, files)?;
-                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                observer.progress(Progress::Reading { done: n, total });
+                let analysis = analyze(triple, &externals)?;
+                let mut n = done.lock().unwrap_or_else(PoisonError::into_inner);
+                *n += 1;
+                observer.progress(Progress::Reading { done: *n, total });
                 Ok(analysis)
             })
             .collect::<Result<_, _>>()?;
         analyses.sort_by_key(|a| a.pos);
 
         // Stage B: protections and decisions for the whole dimension.
-        let is_targeted = targeted(&dim.id);
+        let is_targeted = super::is_targeted(options.gc_dims.as_ref(), &dim.id);
         let forced = if is_targeted {
             match layout::forced_chunks(layout, dim) {
                 Known::Value(chunks) => chunks,
@@ -99,7 +102,20 @@ fn read(path: &Path) -> Result<Vec<u8>, PlanError> {
     })
 }
 
-fn analyze(triple: &TripleFiles, files: &DimensionFiles) -> Result<Analysis, PlanError> {
+/// `.mcc` files of `kind` grouped by region.
+type Externals = BTreeMap<RegionPos, BTreeMap<ChunkPos, PathBuf>>;
+
+fn externals_by_region(files: &DimensionFiles, kind: FileKind) -> Externals {
+    let mut map = Externals::new();
+    for (pos, path) in files.externals(kind) {
+        map.entry(pos.region())
+            .or_default()
+            .insert(*pos, path.clone());
+    }
+    map
+}
+
+fn analyze(triple: &TripleFiles, externals_of: &[Externals; 3]) -> Result<Analysis, PlanError> {
     let mut analysis = Analysis {
         pos: triple.pos,
         issues: Vec::new(),
@@ -112,12 +128,10 @@ fn analyze(triple: &TripleFiles, files: &DimensionFiles) -> Result<Analysis, Pla
         let Some(path) = triple.get(kind) else {
             continue;
         };
-        let externals: BTreeMap<ChunkPos, &PathBuf> = files
-            .externals(kind)
-            .iter()
-            .filter(|(pos, _)| pos.region() == triple.pos)
-            .map(|(pos, path)| (*pos, path))
-            .collect();
+        let empty = BTreeMap::new();
+        let externals = externals_of[kind as usize]
+            .get(&triple.pos)
+            .unwrap_or(&empty);
         let present: BTreeSet<ChunkPos> = externals.keys().copied().collect();
         let file = RegionFile::parse(kind, triple.pos, read(path)?, &present);
         analysis.issues.extend_from_slice(file.issues());
@@ -137,7 +151,7 @@ fn analyze(triple: &TripleFiles, files: &DimensionFiles) -> Result<Analysis, Pla
         }
 
         let mut ext = Vec::new();
-        for (pos, path) in &externals {
+        for (pos, path) in externals {
             let size = fs::metadata(path)
                 .map_err(|source| PlanError::Io {
                     path: path.to_path_buf(),
@@ -214,12 +228,13 @@ fn decide(
             }
         }
     }
-    // R: structure starts referenced by chunks that are not candidates (one pass).
+    // R: structure starts referenced by chunks that are kept for any reason
+    // other than a structure reference (not in C, or kept by F). One pass.
     let mut referenced = BTreeSet::new();
     for a in &analyses {
         for (_, pos, summary) in &a.chunks {
             if let Ok(s) = summary
-                && !candidates.contains(pos)
+                && (!candidates.contains(pos) || forceload.contains(pos))
             {
                 referenced.extend(s.structure_refs.iter().copied());
             }
@@ -400,26 +415,35 @@ fn estimate(
     }
 
     // Everything else under the world folders is copied as it is.
+    // Files the plan accounts for: triple files and the .mcc files attached to
+    // them. A .mcc without its region file stays an ordinary file.
     let mut managed: BTreeSet<&Path> = BTreeSet::new();
     for (_, files) in listed {
         for t in &files.triples {
             managed.extend(FileKind::ALL.into_iter().filter_map(|k| t.get(k)));
         }
-        for kind in FileKind::ALL {
-            managed.extend(files.externals(kind).values().map(PathBuf::as_path));
+    }
+    for dim in dimensions {
+        for t in &dim.triples {
+            for kind in FileKind::ALL {
+                if let Some(file) = t.file(kind) {
+                    managed.extend(file.externals.iter().map(|x| x.path.as_path()));
+                }
+            }
         }
     }
     managed.extend(omitted.iter().map(|o| o.path.as_path()));
+    let lock_files: BTreeSet<PathBuf> = layout
+        .world_folders
+        .iter()
+        .map(|f| f.join(crate::lock::LOCK_FILE))
+        .collect();
     let walked = layout::world_files(layout)?;
     est.other_files_bytes = walked
         .files
         .iter()
         .filter(|f| !managed.contains(f.path.as_path()))
-        .filter(|f| {
-            f.path
-                .file_name()
-                .is_none_or(|n| n != crate::lock::LOCK_FILE)
-        })
+        .filter(|f| !lock_files.contains(&f.path))
         .map(|f| f.size)
         .sum();
     est.total_output_bytes += est.other_files_bytes;

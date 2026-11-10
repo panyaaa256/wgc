@@ -57,7 +57,7 @@ pub fn verify(out: &Path, source: Option<&Path>) -> Result<VerifyOutcome, Verify
 | それ以外 | そのままコピー |
 
 - 空のディレクトリも作る。
-- シンボリックリンクは辿り、実体を書く（ループはエラー）。辿ったら `Warning::SymlinkFollowed`。
+- シンボリックリンクは辿り、実体を書く。同じディレクトリに複数のリンクがあれば、それぞれのパスに書く。自分の祖先を指すリンク（ループ）はエラー。辿ったら `Warning::SymlinkFollowed`。リンク先がないリンクは `Warning::SpecialFileSkipped`。
 - 通常のファイルとディレクトリ以外は出力せず、`Warning::SpecialFileSkipped`。
 - ハードリンクは使わない（Minecraft はリージョンファイルをその場で上書きするので、元のワールドも書き換わる）。
 - 各ファイルを fsync し、最後に作ったディレクトリを fsync する（Unix）。

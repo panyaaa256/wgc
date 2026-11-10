@@ -105,7 +105,7 @@ pub struct EntryInfo {
 
 impl EntryInfo {
     fn packed_bytes(&self) -> u64 {
-        ((4 + self.length as usize).div_ceil(SECTOR_BYTES) * SECTOR_BYTES) as u64
+        (crate::region::packed_sectors(self.length) * SECTOR_BYTES) as u64
     }
 }
 
@@ -233,7 +233,7 @@ impl TriplePlan {
                     + file
                         .entries
                         .iter()
-                        .filter(|e| keep.contains(&e.index))
+                        .filter(|e| keep.binary_search(&e.index).is_ok())
                         .map(EntryInfo::packed_bytes)
                         .sum::<u64>()
             }
@@ -314,8 +314,12 @@ pub struct Plan {
 impl Plan {
     /// Whether GC deletes chunks in `dim`.
     pub fn is_targeted(&self, dim: &DimensionId) -> bool {
-        self.gc_dims.as_ref().is_none_or(|dims| dims.contains(dim))
+        is_targeted(self.gc_dims.as_ref(), dim)
     }
+}
+
+pub(crate) fn is_targeted(gc_dims: Option<&BTreeSet<DimensionId>>, dim: &DimensionId) -> bool {
+    gc_dims.is_none_or(|dims| dims.contains(dim))
 }
 
 /// Why a plan could not be built.

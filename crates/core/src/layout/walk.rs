@@ -1,6 +1,5 @@
 //! Listing every file under the world folders.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -26,47 +25,58 @@ pub struct WorldFiles {
 }
 
 /// Walks all world folders, following symbolic links like the game does.
-/// A directory reached twice through links (a loop) is an error.
+///
+/// A directory reached through links appears under every path that leads to
+/// it (the output copies each path). Only a real loop, a link to a directory
+/// that is its own ancestor, is an error. A dangling link is reported in
+/// `special`. Entries are visited in name order.
 pub fn world_files(layout: &WorldLayout) -> Result<WorldFiles, LayoutError> {
     let mut out = WorldFiles::default();
-    let mut seen = BTreeSet::new();
     for folder in &layout.world_folders {
-        walk(folder, false, &mut seen, &mut out)?;
+        walk(folder, false, &mut Vec::new(), &mut out)?;
     }
     out.files.sort();
     out.files.dedup_by(|a, b| a.path == b.path);
     out.dirs.sort();
     out.dirs.dedup();
     out.special.sort();
+    out.special.dedup();
     Ok(out)
 }
 
 fn walk(
     dir: &Path,
     via_symlink: bool,
-    seen: &mut BTreeSet<PathBuf>,
+    ancestors: &mut Vec<PathBuf>,
     out: &mut WorldFiles,
 ) -> Result<(), LayoutError> {
     let canonical = fs::canonicalize(dir).map_err(|e| LayoutError::io(dir, e))?;
-    if !seen.insert(canonical) {
-        // Already walked: a nested world folder, or a symlink loop.
-        if via_symlink {
-            return Err(LayoutError::SymlinkLoop {
-                path: dir.to_path_buf(),
-            });
-        }
-        return Ok(());
+    if ancestors.contains(&canonical) {
+        return Err(LayoutError::SymlinkLoop {
+            path: dir.to_path_buf(),
+        });
     }
+    ancestors.push(canonical);
     out.dirs.push(dir.to_path_buf());
-    for entry in read_dir_opt(dir)? {
+    let mut entries = read_dir_opt(dir)?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
         let path = entry.path();
         let is_link = entry
             .file_type()
             .map_err(|e| LayoutError::io(&path, e))?
             .is_symlink();
-        let meta = fs::metadata(&path).map_err(|e| LayoutError::io(&path, e))?;
+        let meta = match fs::metadata(&path) {
+            Ok(meta) => meta,
+            // A dangling link: nothing to copy.
+            Err(_) if is_link => {
+                out.special.push(path);
+                continue;
+            }
+            Err(e) => return Err(LayoutError::io(&path, e)),
+        };
         if meta.is_dir() {
-            walk(&path, via_symlink || is_link, seen, out)?;
+            walk(&path, via_symlink || is_link, ancestors, out)?;
         } else if meta.is_file() {
             out.files.push(WorldFile {
                 path,
@@ -77,6 +87,7 @@ fn walk(
             out.special.push(path);
         }
     }
+    ancestors.pop();
     Ok(())
 }
 
@@ -129,6 +140,18 @@ mod tests {
             .unwrap();
         assert!(linked.via_symlink);
         assert_eq!(linked.size, 3);
+
+        // Two links to the same directory are not a loop; both paths are listed.
+        std::os::unix::fs::symlink(outside.path(), w.join("linked_again")).unwrap();
+        std::os::unix::fs::symlink("/nonexistent/wgc-test", w.join("dangling")).unwrap();
+        let found = world_files(&l).unwrap();
+        assert!(
+            found
+                .files
+                .iter()
+                .any(|f| f.path.ends_with("linked_again/x.dat"))
+        );
+        assert_eq!(found.special, [l.root.join("dangling")]);
 
         std::os::unix::fs::symlink(w, w.join("data_loop")).unwrap();
         assert!(matches!(
