@@ -9,13 +9,14 @@ use std::path::{Path, PathBuf};
 
 use yaml_rust2::{Yaml, YamlLoader};
 
-use crate::layout::{self, Dimension, LayoutKind};
+use crate::layout::{self, Dimension, LayoutKind, WorldLayout};
 use crate::nbt::{self, PlayerDimension, PlayerSummary};
-use crate::plan::{Inhabited, Plan};
+use crate::plan::{Inhabited, Plan, PlanError, is_targeted, read_inhabited};
 use crate::types::{ChunkPos, DimensionId, GuardId, Known, UnknownReason};
 use crate::versions::{DV_1_21_5, DV_FILES_26_1, DV_MAX_KNOWN};
 
-/// Results of all trust checks, in ID order T-1..T-5.
+/// Results of the trust checks, in ID order T-1..T-5 (T-3 is absent when
+/// [`check_trust_before_plan`] was told to skip it).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustReport {
     pub checks: Vec<CheckResult>,
@@ -66,35 +67,80 @@ pub enum TrustDetail {
 
 /// Runs T-1..T-5 against a plan.
 pub fn check_trust(plan: &Plan) -> TrustReport {
-    let targeted: Vec<&Dimension> = plan
-        .layout
+    run_checks(
+        &plan.layout,
+        plan.gc_dims.as_ref(),
+        plan.protection_unknown.clone(),
+        Some(|wanted: &BTreeSet<ChunkKey>| Ok(inhabited_in_plan(plan, wanted))),
+    )
+}
+
+/// Runs T-1..T-5 without a plan, so that `gc --out` can stop before reading
+/// every region file. T-3 reads only the region files that hold the chunks
+/// players stand in, and T-5 reads the forced chunks directly.
+///
+/// With `skip_t3`, T-3 reads nothing and is left out of the report: when
+/// `--force` allows it, it cannot stop the run, and the check against the plan
+/// decides whether it was forced.
+pub fn check_trust_before_plan(
+    layout: &WorldLayout,
+    gc_dims: Option<&BTreeSet<DimensionId>>,
+    skip_t3: bool,
+) -> TrustReport {
+    let protection_unknown = layout
         .dimensions
         .iter()
-        .filter(|d| plan.is_targeted(&d.id))
+        .filter(|d| is_targeted(gc_dims, &d.id))
+        .filter(|d| matches!(layout::forced_chunks(layout, d), Known::Unknown(_)))
+        .map(|d| d.id.clone())
         .collect();
+    let inhabited_of =
+        (!skip_t3).then_some(|wanted: &BTreeSet<ChunkKey>| read_inhabited_of(layout, wanted));
+    run_checks(layout, gc_dims, protection_unknown, inhabited_of)
+}
+
+/// A chunk in a dimension.
+type ChunkKey = (DimensionId, ChunkPos);
+
+/// The InhabitedTime of the chunks T-3 looks up; chunks that do not exist are left out.
+type InhabitedMap = BTreeMap<ChunkKey, Inhabited>;
+
+fn run_checks(
+    layout: &WorldLayout,
+    gc_dims: Option<&BTreeSet<DimensionId>>,
+    protection_unknown: BTreeSet<DimensionId>,
+    inhabited_of: Option<impl FnOnce(&BTreeSet<ChunkKey>) -> Result<InhabitedMap, UnknownReason>>,
+) -> TrustReport {
+    let targeted: Vec<&Dimension> = layout
+        .dimensions
+        .iter()
+        .filter(|d| is_targeted(gc_dims, &d.id))
+        .collect();
+    let t3 = inhabited_of.map(|inhabited_of| CheckResult {
+        id: GuardId::T3,
+        status: player_positions(layout, gc_dims, inhabited_of),
+    });
+    let checks = [
+        Some(CheckResult {
+            id: GuardId::T1,
+            status: paper_config(layout, &targeted),
+        }),
+        Some(CheckResult {
+            id: GuardId::T2,
+            status: mob_spawning(layout, &targeted),
+        }),
+        t3,
+        Some(CheckResult {
+            id: GuardId::T4,
+            status: version(layout),
+        }),
+        Some(CheckResult {
+            id: GuardId::T5,
+            status: forced_chunks(gc_dims, protection_unknown),
+        }),
+    ];
     TrustReport {
-        checks: vec![
-            CheckResult {
-                id: GuardId::T1,
-                status: paper_config(plan, &targeted),
-            },
-            CheckResult {
-                id: GuardId::T2,
-                status: mob_spawning(plan, &targeted),
-            },
-            CheckResult {
-                id: GuardId::T3,
-                status: player_positions(plan),
-            },
-            CheckResult {
-                id: GuardId::T4,
-                status: version(plan),
-            },
-            CheckResult {
-                id: GuardId::T5,
-                status: forced_chunks(plan),
-            },
-        ],
+        checks: checks.into_iter().flatten().collect(),
     }
 }
 
@@ -184,8 +230,7 @@ fn read_modern(path: &Path) -> Result<FixedTime, UnknownReason> {
     }
 }
 
-fn paper_config(plan: &Plan, targeted: &[&Dimension]) -> CheckStatus {
-    let layout = &plan.layout;
+fn paper_config(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
     let Some(server_root) = layout
         .server_root
         .as_ref()
@@ -252,8 +297,7 @@ fn paper_config(plan: &Plan, targeted: &[&Dimension]) -> CheckStatus {
 
 // ---- T-2 -----------------------------------------------------------------
 
-fn mob_spawning(plan: &Plan, targeted: &[&Dimension]) -> CheckStatus {
-    let layout = &plan.layout;
+fn mob_spawning(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
     let affected = layout.data_version.is_some_and(|v| v >= DV_1_21_5);
     if !layout.kind.is_bukkit() || !affected {
         return CheckStatus::NotApplicable;
@@ -291,9 +335,7 @@ const SPECTATOR: i32 = 3;
 
 /// Reads every player: the player data folder and, before 26.1, the
 /// singleplayer host in `level.dat`. Unreadable sources are an error.
-fn read_players(
-    layout: &crate::layout::WorldLayout,
-) -> Result<Vec<(String, PlayerSummary)>, UnknownReason> {
+fn read_players(layout: &WorldLayout) -> Result<Vec<(String, PlayerSummary)>, UnknownReason> {
     let unreadable = |path: &Path| UnknownReason::UnreadableFile {
         path: path.to_path_buf(),
     };
@@ -339,7 +381,7 @@ fn read_players(
 }
 
 /// The dimension and chunk a player stands in, if it can be checked.
-fn player_chunk(player: &PlayerSummary) -> Option<(DimensionId, ChunkPos)> {
+fn player_chunk(player: &PlayerSummary) -> Option<ChunkKey> {
     if player.game_type == Some(SPECTATOR) {
         return None;
     }
@@ -354,41 +396,37 @@ fn player_chunk(player: &PlayerSummary) -> Option<(DimensionId, ChunkPos)> {
     Some((id, block_to_chunk(pos[0], pos[2])?))
 }
 
-fn player_positions(plan: &Plan) -> CheckStatus {
-    let players = match read_players(&plan.layout) {
+fn player_positions(
+    layout: &WorldLayout,
+    gc_dims: Option<&BTreeSet<DimensionId>>,
+    inhabited_of: impl FnOnce(&BTreeSet<ChunkKey>) -> Result<InhabitedMap, UnknownReason>,
+) -> CheckStatus {
+    let players = match read_players(layout) {
         Ok(players) => players,
         Err(reason) => return CheckStatus::Unknown(reason),
     };
-    let wanted: Vec<(String, DimensionId, ChunkPos)> = players
+    let wanted: Vec<(String, ChunkKey)> = players
         .into_iter()
-        .filter_map(|(uuid, p)| player_chunk(&p).map(|(id, pos)| (uuid, id, pos)))
-        .filter(|(_, id, _)| plan.is_targeted(id))
+        .filter_map(|(uuid, p)| player_chunk(&p).map(|key| (uuid, key)))
+        .filter(|(_, (id, _))| is_targeted(gc_dims, id))
         .collect();
-    let keys: BTreeSet<(&DimensionId, ChunkPos)> =
-        wanted.iter().map(|(_, id, pos)| (id, *pos)).collect();
-
-    // Look up only the chunks players stand in.
-    let mut inhabited: BTreeMap<(&DimensionId, ChunkPos), &Inhabited> = BTreeMap::new();
-    for dim in &plan.dimensions {
-        for t in &dim.triples {
-            for c in &t.chunks {
-                if keys.contains(&(&dim.dimension.id, c.pos)) {
-                    inhabited.insert((&dim.dimension.id, c.pos), &c.inhabited);
-                }
-            }
-        }
-    }
+    let keys: BTreeSet<ChunkKey> = wanted.iter().map(|(_, key)| key.clone()).collect();
+    let inhabited = match inhabited_of(&keys) {
+        Ok(inhabited) => inhabited,
+        Err(reason) => return CheckStatus::Unknown(reason),
+    };
 
     let mut checked = 0;
     let mut details = Vec::new();
-    for (uuid, id, pos) in &wanted {
-        match inhabited.get(&(id, *pos)) {
+    for (uuid, key) in wanted {
+        match inhabited.get(&key) {
             Some(Inhabited::Value(0)) => {
                 checked += 1;
+                let (dimension, pos) = key;
                 details.push(TrustDetail::PlayerInZeroChunk {
-                    uuid: uuid.clone(),
-                    dimension: id.clone(),
-                    pos: *pos,
+                    uuid,
+                    dimension,
+                    pos,
                 });
             }
             Some(Inhabited::Value(_)) => checked += 1,
@@ -400,6 +438,49 @@ fn player_positions(plan: &Plan) -> CheckStatus {
         return CheckStatus::Unknown(UnknownReason::NoPlayersChecked);
     }
     from_details(details)
+}
+
+fn inhabited_in_plan(plan: &Plan, wanted: &BTreeSet<ChunkKey>) -> InhabitedMap {
+    let mut found = BTreeMap::new();
+    for dim in &plan.dimensions {
+        for t in &dim.triples {
+            for c in &t.chunks {
+                let key = (dim.dimension.id.clone(), c.pos);
+                if wanted.contains(&key) {
+                    found.insert(key, c.inhabited.clone());
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Reads the chunks from the region files, one dimension at a time.
+fn read_inhabited_of(
+    layout: &WorldLayout,
+    wanted: &BTreeSet<ChunkKey>,
+) -> Result<InhabitedMap, UnknownReason> {
+    let mut found = BTreeMap::new();
+    for dim in &layout.dimensions {
+        let chunks: BTreeSet<ChunkPos> = wanted
+            .iter()
+            .filter(|(id, _)| *id == dim.id)
+            .map(|(_, pos)| *pos)
+            .collect();
+        let inhabited =
+            read_inhabited(dim, &chunks).map_err(|e| UnknownReason::UnreadableFile {
+                path: match e {
+                    PlanError::Io { path, .. } => path,
+                    _ => dim.dir.clone(),
+                },
+            })?;
+        found.extend(
+            inhabited
+                .into_iter()
+                .map(|(pos, inhabited)| ((dim.id.clone(), pos), inhabited)),
+        );
+    }
+    Ok(found)
 }
 
 fn block_to_chunk(x: f64, z: f64) -> Option<ChunkPos> {
@@ -426,20 +507,18 @@ fn read_gzip<T>(path: &Path, parse: impl FnOnce(&[u8]) -> Result<T, nbt::NbtErro
 
 // ---- T-4, T-5 --------------------------------------------------------------
 
-fn version(plan: &Plan) -> CheckStatus {
-    match plan.layout.data_version {
+fn version(layout: &WorldLayout) -> CheckStatus {
+    match layout.data_version {
         Some(v) if v > DV_MAX_KNOWN => CheckStatus::Unknown(UnknownReason::UnknownVersion(v)),
         _ => CheckStatus::Pass,
     }
 }
 
-fn forced_chunks(plan: &Plan) -> CheckStatus {
-    let unknown: BTreeSet<DimensionId> = plan
-        .protection_unknown
-        .iter()
-        .filter(|id| plan.is_targeted(id))
-        .cloned()
-        .collect();
+fn forced_chunks(
+    gc_dims: Option<&BTreeSet<DimensionId>>,
+    mut unknown: BTreeSet<DimensionId>,
+) -> CheckStatus {
+    unknown.retain(|id| is_targeted(gc_dims, id));
     if unknown.is_empty() {
         CheckStatus::Pass
     } else {

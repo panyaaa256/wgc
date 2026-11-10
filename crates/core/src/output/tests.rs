@@ -170,6 +170,85 @@ fn missing_session_lock_is_l1() {
     assert!(outcome.forced.contains(&GuardId::L1));
 }
 
+/// Counts progress events of the plan's region read.
+#[derive(Default)]
+struct ReadCounter(Mutex<u64>);
+
+impl crate::types::Observer for ReadCounter {
+    fn progress(&self, p: Progress) {
+        if matches!(p, Progress::Reading { .. }) {
+            *self.0.lock().unwrap() += 1;
+        }
+    }
+    fn warn(&self, _: crate::types::Warning) {}
+}
+
+#[test]
+fn every_stop_comes_before_reading_the_regions() {
+    let w = world();
+    std::fs::remove_file(w.path().join("session.lock")).unwrap();
+    write(&w.path().join("data/chunks.dat"), b"broken");
+    let o = tempfile::tempdir().unwrap();
+    let layout = crate::layout::detect(w.path()).unwrap();
+    let mut opts = options(&o.path().join("out"));
+    opts.allowed.clear();
+    let reads = ReadCounter::default();
+    let err = run_gc(&layout, &opts, &reads, &AtomicBool::new(false)).unwrap_err();
+    assert!(
+        matches!(&err, OutputError::Stopped(ids) if ids == &[GuardId::T3, GuardId::T5, GuardId::L1]),
+        "{err:?}"
+    );
+    assert_eq!(*reads.0.lock().unwrap(), 0);
+}
+
+/// Records which came first: the plan's region read or each warning.
+#[derive(Default)]
+struct EventLog(Mutex<Vec<String>>);
+
+impl crate::types::Observer for EventLog {
+    fn progress(&self, p: Progress) {
+        let mut log = self.0.lock().unwrap();
+        if matches!(p, Progress::Reading { .. }) && !log.iter().any(|e| e == "read") {
+            log.push("read".to_owned());
+        }
+    }
+    fn warn(&self, w: crate::types::Warning) {
+        self.0.lock().unwrap().push(format!("{w:?}"));
+    }
+}
+
+#[test]
+fn forced_t3_is_decided_by_the_plan() {
+    // No player: T-3 is unknown, and only the plan's check reports it.
+    let w = world();
+    let o = tempfile::tempdir().unwrap();
+    let layout = crate::layout::detect(w.path()).unwrap();
+    let log = EventLog::default();
+    let outcome = run_gc(
+        &layout,
+        &options(&o.path().join("a")),
+        &log,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(outcome.forced.contains(&GuardId::T3));
+    assert_eq!(*log.0.lock().unwrap(), ["read", "Forced(T3)"]);
+
+    // A player in chunk (1, 0), InhabitedTime 100: T-3 passes and is not forced.
+    let nbt = doc(vec![
+        ("Pos", V::DoubleList(vec![24.0, 64.0, 1.0])),
+        ("Dimension", V::Str("minecraft:overworld")),
+        ("playerGameType", V::Int(0)),
+    ]);
+    write(
+        &w.path()
+            .join("playerdata/00000000-0000-0000-0000-00000000000a.dat"),
+        &gzip(&nbt),
+    );
+    let outcome = run(w.path(), &o.path().join("b")).unwrap();
+    assert!(outcome.forced.is_empty(), "{:?}", outcome.forced);
+}
+
 #[test]
 fn world_in_use_is_refused() {
     let w = world();

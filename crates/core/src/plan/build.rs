@@ -92,7 +92,7 @@ struct Analysis {
     region: Option<FileInfo>,
     entities: Option<FileInfo>,
     poi: Option<FileInfo>,
-    chunks: Vec<(ChunkIndex, ChunkPos, Result<ChunkSummary, ContentError>)>,
+    chunks: ChunkSummaries,
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, PlanError> {
@@ -137,17 +137,7 @@ fn analyze(triple: &TripleFiles, externals_of: &[Externals; 3]) -> Result<Analys
         analysis.issues.extend_from_slice(file.issues());
 
         if kind == FileKind::Region {
-            for entry in file.entries() {
-                let payload = file.payload(entry.index).expect("entry has a payload");
-                let external = match externals.get(&entry.pos) {
-                    Some(path) if entry.is_external() => Some(read(path)?),
-                    _ => None,
-                };
-                let summary = decompress(payload, external.as_deref())
-                    .map_err(ContentError::from)
-                    .and_then(|nbt| read_chunk_summary(&nbt).map_err(ContentError::from));
-                analysis.chunks.push((entry.index, entry.pos, summary));
-            }
+            analysis.chunks = chunk_summaries(&file, externals, |_| true)?;
         }
 
         let mut ext = Vec::new();
@@ -186,6 +176,61 @@ fn analyze(triple: &TripleFiles, externals_of: &[Externals; 3]) -> Result<Analys
     }
     analysis.issues.sort();
     Ok(analysis)
+}
+
+type ChunkSummaries = Vec<(ChunkIndex, ChunkPos, Result<ChunkSummary, ContentError>)>;
+
+/// Reads the summary of every chunk of a parsed region file that `wanted` accepts.
+fn chunk_summaries(
+    file: &RegionFile,
+    externals: &BTreeMap<ChunkPos, PathBuf>,
+    wanted: impl Fn(ChunkPos) -> bool,
+) -> Result<ChunkSummaries, PlanError> {
+    let mut chunks = Vec::new();
+    for entry in file.entries().iter().filter(|e| wanted(e.pos)) {
+        // Every entry has a payload; `RegionFile::parse` lists no other.
+        let Some(payload) = file.payload(entry.index) else {
+            continue;
+        };
+        let external = match externals.get(&entry.pos) {
+            Some(path) if entry.is_external() => Some(read(path)?),
+            _ => None,
+        };
+        let summary = decompress(payload, external.as_deref())
+            .map_err(ContentError::from)
+            .and_then(|nbt| read_chunk_summary(&nbt).map_err(ContentError::from));
+        chunks.push((entry.index, entry.pos, summary));
+    }
+    Ok(chunks)
+}
+
+/// The InhabitedTime of `chunks` in `dim`, read exactly as [`build_plan`]
+/// reads it but only from the region files that hold them. Chunks that do not
+/// exist are left out.
+pub(crate) fn read_inhabited(
+    dim: &Dimension,
+    chunks: &BTreeSet<ChunkPos>,
+) -> Result<BTreeMap<ChunkPos, Inhabited>, PlanError> {
+    let regions: BTreeSet<RegionPos> = chunks.iter().map(|c| c.region()).collect();
+    if regions.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let files = layout::list_dimension_files(dim)?;
+    let externals = externals_by_region(&files, FileKind::Region);
+    let empty = BTreeMap::new();
+    let mut found = BTreeMap::new();
+    for triple in files.triples.iter().filter(|t| regions.contains(&t.pos)) {
+        let Some(path) = &triple.region else {
+            continue;
+        };
+        let externals = externals.get(&triple.pos).unwrap_or(&empty);
+        let present: BTreeSet<ChunkPos> = externals.keys().copied().collect();
+        let file = RegionFile::parse(FileKind::Region, triple.pos, read(path)?, &present);
+        for (_, pos, summary) in chunk_summaries(&file, externals, |pos| chunks.contains(&pos))? {
+            found.insert(pos, inhabited(&summary));
+        }
+    }
+    Ok(found)
 }
 
 fn inhabited(summary: &Result<ChunkSummary, ContentError>) -> Inhabited {

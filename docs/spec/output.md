@@ -20,17 +20,18 @@ pub fn verify(out: &Path, source: Option<&Path>) -> Result<VerifyOutcome, Verify
 | 順 | 段階 | 失敗したとき |
 |---|---|---|
 | 1 | 出力先の確認 | 中止（何も書かない） |
-| 2 | `SessionLocks::try_acquire_all` | 中止。`Missing` は L-1（`--force` で続行） |
-| 3 | 元のワールドの状態を記録（メモリ上） | 中止 |
-| 4 | Plan を作る | 中止 |
-| 5 | 信用の確認 | 中止（`--force` で許された ID は続行） |
-| 6 | 空き容量の確認 | 中止 |
-| 7 | 出力を書く | `failure.json` を書いて終了 |
-| 8 | 検証 | 同上 |
-| 9 | `source-state.json`、`complete.json` を書く | 同上 |
-| 10 | ロックを解放 | — |
+| 2 | `SessionLocks::try_acquire_all` | 中止。`Missing` は L-1（段階 3 の結果とまとめて判定する） |
+| 3 | Plan を作る前の信用の確認（T-1〜T-5。`check_trust_before_plan`。`--force` で T-3 が許されていれば T-3 は段階 6 だけで確かめる） | L-1 と合わせて中止（`--force` で許された ID は続行） |
+| 4 | 元のワールドの状態を記録（メモリ上） | 中止 |
+| 5 | Plan を作る | 中止 |
+| 6 | Plan に対する信用の確認（`check_trust`） | 中止（`--force` で許された ID は続行） |
+| 7 | 空き容量の確認 | 中止 |
+| 8 | 出力を書く | `failure.json` を書いて終了 |
+| 9 | 検証 | 同上 |
+| 10 | `source-state.json`、`complete.json` を書く | 同上 |
+| 11 | ロックを解放 | — |
 
-段階 1〜6 で中止したときは、出力先のフォルダを作らない。
+段階 1〜7 で中止したときは、出力先のフォルダを作らない。`--force` で許されていない停止は、すべて段階 3 でわかる（すべてのリージョンファイルを読み終えるまで待たせない）。段階 6 の結果は、その間にファイルが変わらない限り段階 3 と同じになる（L-1 を無視してロックなしで続行した場合への備え）。`--force` で許された停止の警告（`Warning::Forced`、`Warning::LockSkipped`）は、その段階で続行が決まったときだけ出す。
 
 中断（`cancel`）されたら、その場で止め、ロックを解放して `OutputError::Cancelled` を返す。出力先は `complete.json` も `failure.json` もないまま残る（不完全な出力）。
 
@@ -73,7 +74,7 @@ pub fn verify(out: &Path, source: Option<&Path>) -> Result<VerifyOutcome, Verify
 | V-3 | 詰め直したファイルの残すエントリのペイロードとタイムスタンプが、元と一致する |
 | V-4 | そのままコピーしたファイル（`.mcc` を含む）のサイズが、元と一致する |
 | V-5 | 出力先のファイルの集合が、Plan から独立に求めた「出力すべきファイル」の集合と一致する（`.wgc/` を除く） |
-| V-6 | 元のワールドの状態が、段階 3 の記録と一致する |
+| V-6 | 元のワールドの状態が、段階 4 の記録と一致する |
 
 失敗したら、すべての失敗を `failure.json` に書く。
 
