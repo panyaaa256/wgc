@@ -10,6 +10,7 @@ pub mod lock;
 pub mod nbt;
 pub mod plan;
 pub mod region;
+pub mod trust;
 pub mod types;
 pub mod versions;
 

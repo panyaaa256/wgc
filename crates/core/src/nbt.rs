@@ -324,6 +324,79 @@ fn read_forced_ticket(r: &mut SliceReader<'_>) -> Result<Option<ChunkPos>, NbtEr
     }
 }
 
+/// The dimension field of a player: an old numeric ID or a namespaced ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayerDimension {
+    Legacy(i32),
+    Named(String),
+}
+
+/// Fields of a player the trust check needs. Unreadable fields are `None`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PlayerSummary {
+    pub pos: Option<[f64; 3]>,
+    pub dimension: Option<PlayerDimension>,
+    pub game_type: Option<i32>,
+}
+
+/// Reads a decompressed `<uuid>.dat` player file.
+pub fn read_player(nbt: &[u8]) -> Result<PlayerSummary, NbtError> {
+    let mut reader = root_compound(nbt)?;
+    read_player_fields(&mut reader)
+}
+
+/// Reads `Data.Player` from decompressed `level.dat` (DataVersion < 4772).
+pub fn read_level_player(nbt: &[u8]) -> Result<Option<PlayerSummary>, NbtError> {
+    let mut reader = root_compound(nbt)?;
+    let mut player = None;
+    for_each_entry(&mut reader, |name, tag, r| {
+        if name != Some(b"Data") || tag != Tag::Compound {
+            return Ok(false);
+        }
+        for_each_entry(r, |name, tag, r| {
+            if name == Some(b"Player") && tag == Tag::Compound {
+                player = Some(read_player_fields(r)?);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })?;
+        Ok(true)
+    })?;
+    Ok(player)
+}
+
+fn read_player_fields(r: &mut SliceReader<'_>) -> Result<PlayerSummary, NbtError> {
+    let mut p = PlayerSummary::default();
+    for_each_entry(r, |name, tag, r| {
+        match (name, tag) {
+            (Some(b"Pos"), Tag::List) => {
+                let element = Tag::from_u8(r.read_u8()?)?;
+                let count = nanonbt::read_count(r)?;
+                if element == Tag::Double && count == 3 {
+                    p.pos = Some([r.read_f64_be()?, r.read_f64_be()?, r.read_f64_be()?]);
+                } else {
+                    // Not a position we understand: skip the elements.
+                    for _ in 0..count {
+                        nanonbt::skip_nbt(r, element)?;
+                    }
+                }
+            }
+            (Some(b"Dimension"), Tag::Int) => {
+                p.dimension = Some(PlayerDimension::Legacy(r.read_i32_be()?))
+            }
+            (Some(b"Dimension"), Tag::String) => {
+                let bytes = read_string_bytes(r)?;
+                p.dimension = String::from_utf8(bytes).ok().map(PlayerDimension::Named);
+            }
+            (Some(b"playerGameType"), Tag::Int) => p.game_type = Some(r.read_i32_be()?),
+            _ => return Ok(false),
+        }
+        Ok(true)
+    })?;
+    Ok(p)
+}
+
 /// Reads a string payload as raw bytes (not decoded).
 fn read_string_bytes(r: &mut SliceReader<'_>) -> Result<Vec<u8>, NbtError> {
     let len = r.read_u16_be()? as usize;
@@ -394,6 +467,7 @@ pub(crate) mod test_util {
         LongArray(Vec<i64>),
         IntArray(Vec<i32>),
         List(Vec<i32>),
+        DoubleList(Vec<f64>),
         CompoundList(Vec<Vec<(&'static str, V)>>),
         Compound(Vec<(&'static str, V)>),
     }
@@ -404,7 +478,7 @@ pub(crate) mod test_util {
             V::Int(_) => 3,
             V::Long(_) => 4,
             V::Str(_) => 8,
-            V::List(_) | V::CompoundList(_) => 9,
+            V::List(_) | V::DoubleList(_) | V::CompoundList(_) => 9,
             V::Compound(_) => 10,
             V::IntArray(_) => 11,
             V::LongArray(_) => 12,
@@ -427,6 +501,13 @@ pub(crate) mod test_util {
                 out.extend_from_slice(&(items.len() as i32).to_be_bytes());
                 for i in items {
                     out.extend_from_slice(&i.to_be_bytes());
+                }
+            }
+            V::DoubleList(items) => {
+                out.push(6);
+                out.extend_from_slice(&(items.len() as i32).to_be_bytes());
+                for v in items {
+                    out.extend_from_slice(&v.to_be_bytes());
                 }
             }
             V::CompoundList(items) => {
@@ -795,6 +876,46 @@ mod tests {
         gz.write_all(b"level").unwrap();
         assert_eq!(gunzip(&gz.finish().unwrap()).unwrap(), b"level");
         assert_eq!(gunzip(b"not gzip"), Err(NbtError::Malformed));
+    }
+
+    #[test]
+    fn player_fields() {
+        let mut nbt = doc(vec![
+            ("Dimension", V::Str("minecraft:the_nether")),
+            ("playerGameType", V::Int(3)),
+        ]);
+        // Append Pos as a list of three doubles by hand (the test writer has no Double).
+        nbt.pop();
+        nbt.extend_from_slice(&[9, 0, 3]);
+        nbt.extend_from_slice(b"Pos");
+        nbt.push(6);
+        nbt.extend_from_slice(&3i32.to_be_bytes());
+        for v in [-17.5f64, 64.0, 32.25] {
+            nbt.extend_from_slice(&v.to_be_bytes());
+        }
+        nbt.push(0);
+        let p = read_player(&nbt).unwrap();
+        assert_eq!(p.pos, Some([-17.5, 64.0, 32.25]));
+        assert_eq!(
+            p.dimension,
+            Some(PlayerDimension::Named("minecraft:the_nether".into()))
+        );
+        assert_eq!(p.game_type, Some(3));
+
+        let legacy = doc(vec![(
+            "Data",
+            V::Compound(vec![(
+                "Player",
+                V::Compound(vec![("Dimension", V::Int(-1))]),
+            )]),
+        )]);
+        let p = read_level_player(&legacy).unwrap().unwrap();
+        assert_eq!(p.dimension, Some(PlayerDimension::Legacy(-1)));
+        assert_eq!(p.pos, None);
+        assert_eq!(
+            read_level_player(&doc(vec![("Data", V::Compound(vec![]))])).unwrap(),
+            None
+        );
     }
 
     /// Random corruption of a valid document must never panic.

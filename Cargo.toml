@@ -18,4 +18,5 @@ lz4_flex = { version = "0.14", default-features = false, features = ["safe-decod
 xxhash-rust = { version = "0.8", features = ["xxh32"] }
 tempfile = "3"
 rayon = "1.12"
+yaml-rust2 = "0.13"
 nanonbt = { git = "https://github.com/TMCJapan/nanonbt", rev = "50ee11b581ac4790e594bff81ebe07d394f09891", default-features = false, features = ["alloc"] }

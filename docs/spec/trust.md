@@ -34,7 +34,7 @@ GC の対象のディメンション（`plan.gc_dims`、指定がなければ全
 | `-1` | 合格 |
 | `default`、キーなし、ファイルなし | 既定値のファイルで判定（0 以上なら不合格、それ以外は合格） |
 
-YAML を読めない、型が想定外なら「確認できない」。
+負の値は `-1` と同じく無効として扱う。YAML を読めない、型が想定外なら「確認できない」。
 
 ## T-2: モブのスポーン
 
@@ -101,6 +101,8 @@ pub enum UnknownReason {
     ForcedChunksUnknown(BTreeSet<DimensionId>),
 }
 ```
+
+`TrustReport::stops()` は、不合格か「確認できない」の確認の ID を返す（P7 が使う）。
 
 ## 判定の使い方
 

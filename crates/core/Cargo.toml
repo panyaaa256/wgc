@@ -14,6 +14,7 @@ lz4_flex.workspace = true
 xxhash-rust.workspace = true
 nanonbt.workspace = true
 rayon.workspace = true
+yaml-rust2.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
