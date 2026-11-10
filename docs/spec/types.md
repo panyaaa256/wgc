@@ -62,8 +62,8 @@ pub trait Observer: Send + Sync {
 
 pub enum Progress {
     Reading { done: u64, total: u64 },   // リージョン三つ組の数
-    Writing { done: u64, total: u64 },
-    Verifying { done: u64, total: u64 },
+    Writing { done: u64, total: u64 },   // 元のワールドのファイルの数
+    Verifying { done: u64, total: u64 }, // 書いたファイルの数
 }
 
 pub enum Warning {
@@ -77,7 +77,8 @@ pub enum Warning {
 }
 ```
 
-- 中断は `&AtomicBool` で受け取り、リージョン三つ組ごとに確かめる。立っていたら、各モジュールのエラーの `Cancelled` で戻る。
+- 進捗は各段階の最初に `done = 0` で1回報告し、その後は1件終わるごとに報告する。並列に処理していても `done` は減らない。
+- 中断は `&AtomicBool` で受け取り、リージョン三つ組ごと（書き出しと検証ではファイルごと）に確かめる。立っていたら、各モジュールのエラーの `Cancelled` で戻る。
 - 文章は `wgc-core` で作らない。英語のメッセージは CLI の1か所にまとめる（cli.md）。
 
 ## エラー
