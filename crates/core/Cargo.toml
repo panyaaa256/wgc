@@ -3,7 +3,6 @@ name = "wgc-core"
 description = "Analysis and processing for wgc, the Minecraft world chunk GC"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 

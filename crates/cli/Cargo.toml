@@ -3,7 +3,6 @@ name = "wgc"
 description = "Delete unused chunks from Minecraft Java Edition worlds"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 

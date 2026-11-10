@@ -55,7 +55,8 @@ wgc verify <out>                     # 書き戻してよいかの確認
 ### ワークスペース
 
 - ルートの `Cargo.toml` は仮想マニフェストにする。`resolver = "3"`。
-- `[workspace.package]`: `edition = "2024"`、`rust-version = "1.93"`（nanonbt の最低バージョン）、`license = "MIT"`（nanonbt は MIT OR Apache-2.0）。
+- `[workspace.package]`: `edition = "2024"`、`license = "MIT"`（nanonbt は MIT OR Apache-2.0）。
+- ツールチェーンはルートの `rust-toolchain.toml` で `1.99.1` に固定する（components: rustfmt、clippy、rust-analyzer）。`rust-version`（MSRV）は宣言しない。
 - `[workspace.dependencies]` で依存の版をまとめる。nanonbt は `git` と `rev` で固定する。
 - `crates/core`（`wgc-core`、ライブラリ）と `crates/cli`（`wgc`、バイナリ）。どちらも `publish = false`。
 - 配布: GitHub Releases のバイナリと、`cargo install --git <repo> --locked`（git の依存があるので crates.io には公開できない）。
