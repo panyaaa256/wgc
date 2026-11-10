@@ -258,3 +258,46 @@ fn no_color_disables_escapes() {
     let o = wgc_env(&["scan", s(w.path())], &[]);
     assert!(!stdout(&o).contains('\x1b'));
 }
+
+#[test]
+fn partial_force_keeps_the_other_stops() {
+    let w = world();
+    // Unreadable forced chunks: T-5 is unknown, in addition to T-3.
+    write(&w.path().join("data/chunks.dat"), b"broken");
+    let o = tempfile::tempdir().unwrap();
+    let out = o.path().join("out");
+    let r = wgc(&["gc", s(w.path()), "-o", s(&out), "--force=T-3"]);
+    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    assert!(stderr(&r).contains("T-5"));
+    assert!(stderr(&r).contains("NOT protected"));
+    assert!(!out.exists());
+}
+
+#[test]
+fn forced_missing_lock_is_reported_as_missing() {
+    let w = world();
+    std::fs::remove_file(w.path().join("session.lock")).unwrap();
+    let o = tempfile::tempdir().unwrap();
+    let out = o.path().join("out");
+    let r = wgc(&[
+        "gc",
+        s(w.path()),
+        "-o",
+        s(&out),
+        "--force=T-3,L-1",
+        "--json",
+    ]);
+    assert_eq!(r.status.code(), Some(0), "{}", stderr(&r));
+    let v: serde_json::Value = serde_json::from_slice(&r.stdout).unwrap();
+    assert_eq!(v["lock"], "missing");
+    assert_eq!(v["forced"], serde_json::json!(["T-3", "L-1"]));
+}
+
+#[test]
+fn scan_lock_warning_names_the_cause() {
+    let w = world();
+    std::fs::remove_file(w.path().join("session.lock")).unwrap();
+    let r = wgc(&["scan", s(w.path())]);
+    assert!(stderr(&r).contains("is missing, so a running game cannot be detected"));
+    assert!(!stderr(&r).contains("is in use"));
+}

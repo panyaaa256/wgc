@@ -11,12 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use clap::Parser;
 use wgc_core::layout::{self, WorldLayout};
-use wgc_core::lock::SessionLocks;
 use wgc_core::output::{self, GcOptions, OutputError, VerifyError};
 use wgc_core::plan::{PlanError, PlanOptions, build_plan};
-use wgc_core::report::{self, LockStatus, ReportError, ScanReport};
+use wgc_core::report::{self, LockStatus, ReportError};
 use wgc_core::trust::check_trust;
-use wgc_core::types::{Observer, Warning};
 
 use args::{Cli, Command, GcArgs, ScanArgs, VerifyArgs};
 use ui::{SummaryKind, Terminal};
@@ -25,6 +23,7 @@ use ui::{SummaryKind, Terminal};
 mod exit {
     pub const SUCCESS: u8 = 0;
     pub const WARNINGS: u8 = 1;
+    pub const USAGE: u8 = 2;
     pub const STOPPED: u8 = 3;
     pub const ERROR: u8 = 4;
     pub const VERIFY: u8 = 5;
@@ -106,12 +105,12 @@ fn finish(warned: bool, strict: bool) -> u8 {
     }
 }
 
-fn has_trust_problems(r: &ScanReport) -> bool {
-    r.trust.iter().any(|t| {
-        matches!(
-            t.status,
-            report::TrustStatus::Fail | report::TrustStatus::Unknown
-        )
+/// A Ctrl-C that arrived after the core returned still ends the run with 130,
+/// before any result is printed.
+fn interrupted(term: &Terminal) -> Option<u8> {
+    CANCEL.load(Ordering::SeqCst).then(|| {
+        term.error(messages::INTERRUPTED);
+        exit::INTERRUPTED
     })
 }
 
@@ -124,6 +123,9 @@ fn scan(a: &ScanArgs, cli: &Cli, term: &Terminal) -> u8 {
         Ok(r) => r,
         Err(e) => return report_error(&e, "scan", term),
     };
+    if let Some(code) = interrupted(term) {
+        return code;
+    }
     if let Some(mut out) = summary_sink(a.json, cli.quiet) {
         let _ = ui::summary(
             &mut out,
@@ -138,7 +140,7 @@ fn scan(a: &ScanArgs, cli: &Cli, term: &Terminal) -> u8 {
     {
         return code;
     }
-    finish(term.warnings() > 0 || has_trust_problems(&report), a.strict)
+    finish(term.warnings() > 0 || report.has_stops(), a.strict)
 }
 
 fn gc(a: &GcArgs, cli: &Cli, term: &Terminal) -> u8 {
@@ -151,8 +153,8 @@ fn gc(a: &GcArgs, cli: &Cli, term: &Terminal) -> u8 {
     if let Some(dims) = &gc_dims {
         let known: BTreeSet<_> = layout.dimensions.iter().map(|d| &d.id).collect();
         if let Some(missing) = dims.iter().find(|d| !known.contains(d)) {
-            term.error(&format!("This world has no dimension {missing}."));
-            return 2;
+            term.error(&messages::unknown_dimension(missing.as_str()));
+            return exit::USAGE;
         }
     }
     match &a.out {
@@ -168,15 +170,7 @@ fn gc_estimate(
     layout: &WorldLayout,
     gc_dims: Option<BTreeSet<wgc_core::types::DimensionId>>,
 ) -> u8 {
-    let locks = SessionLocks::try_acquire_all(layout);
-    let lock = LockStatus::from_result(&locks);
-    let _held = match locks {
-        Ok(held) => Some(held),
-        Err(e) => {
-            term.warn(Warning::LockUnavailable(e));
-            None
-        }
-    };
+    let (lock, _held) = report::try_lock_for_report(layout, term);
     let plan = match build_plan(layout, &PlanOptions { gc_dims }, term, &CANCEL) {
         Ok(p) => p,
         Err(e) => return report_error(&ReportError::Plan(e), "gc", term),
@@ -188,6 +182,9 @@ fn gc_estimate(
         Ok(r) => r,
         Err(e) => return report_error(&e, "gc", term),
     };
+    if let Some(code) = interrupted(term) {
+        return code;
+    }
     if let Some(mut out) = summary_sink(a.json, cli.quiet) {
         let _ = ui::summary(
             &mut out,
@@ -196,20 +193,14 @@ fn gc_estimate(
             SummaryKind::Estimate,
             sink_style(a.json, cli.no_color),
         );
-        let _ = writeln!(
-            out,
-            "Nothing was written. Run again with --out <DIR> to write the result."
-        );
+        let _ = writeln!(out, "{}", messages::NOTHING_WRITTEN);
     }
     if a.json
         && let Err(code) = print_json(&report, term)
     {
         return code;
     }
-    finish(
-        term.warnings() > 0 || has_trust_problems(&report.scan),
-        a.strict,
-    )
+    finish(term.warnings() > 0 || report.scan.has_stops(), a.strict)
 }
 
 fn gc_output(
@@ -249,10 +240,15 @@ fn gc_output(
             };
         }
     };
-    let result =
-        report::scan_report(&outcome.plan, &outcome.trust, LockStatus::Acquired).and_then(|scan| {
-            report::gc_report(scan, Some(&outcome.out), &outcome.forced, &outcome.plan)
-        });
+    // Folders without session.lock were not locked when L-1 was forced.
+    let output_lock = if outcome.lock_skipped {
+        LockStatus::Missing
+    } else {
+        LockStatus::Acquired
+    };
+    let result = report::scan_report(&outcome.plan, &outcome.trust, output_lock).and_then(|scan| {
+        report::gc_report(scan, Some(&outcome.out), &outcome.forced, &outcome.plan)
+    });
     let report = match result {
         Ok(r) => r,
         Err(e) => return report_error(&e, "gc", term),
@@ -266,7 +262,12 @@ fn gc_output(
             SummaryKind::Output,
             style,
         );
-        let _ = writeln!(sink, "{} {}", style.green("Done:"), outcome.out.display());
+        let _ = writeln!(
+            sink,
+            "{} {}",
+            style.green(messages::DONE),
+            outcome.out.display()
+        );
         if !outcome.forced.is_empty() {
             let ids: Vec<String> = outcome.forced.iter().map(ToString::to_string).collect();
             let _ = writeln!(sink, "{}", style.yellow(&messages::forced_output(&ids)));
@@ -298,6 +299,9 @@ struct VerifyJson {
 
 fn verify(a: &VerifyArgs, cli: &Cli, term: &Terminal) -> u8 {
     let result = output::verify(&a.out, a.source.as_deref());
+    if let Some(code) = interrupted(term) {
+        return code;
+    }
     let (name, code) = match &result {
         Ok(_) => ("ready", exit::SUCCESS),
         Err(VerifyError::Incomplete { .. }) => ("incomplete", exit::VERIFY),
@@ -318,19 +322,8 @@ fn verify(a: &VerifyArgs, cli: &Cli, term: &Terminal) -> u8 {
                         style.yellow(&messages::forced_output(&ok.forced))
                     );
                 }
-                let state: Option<output::SourceState> =
-                    std::fs::read(a.out.join(".wgc/source-state.json"))
-                        .ok()
-                        .and_then(|b| serde_json::from_slice(&b).ok());
-                if let Some(state) = state {
-                    let _ = ui::swap_steps(
-                        &mut sink,
-                        &state.layout,
-                        &ok.source,
-                        &state.world_folders,
-                        &a.out,
-                    );
-                }
+                let _ =
+                    ui::swap_steps(&mut sink, &ok.layout, &ok.source, &ok.world_folders, &a.out);
             }
         }
         Err(e) => term.error(&messages::verify(e)),

@@ -187,6 +187,10 @@ pub struct VerifyOutcome {
     pub source: PathBuf,
     /// Checks that `gc --out` ignored with `--force`.
     pub forced: Vec<String>,
+    /// Layout kind as in `source-state.json` (`vanilla_legacy`, ...).
+    pub layout: String,
+    /// World folders relative to `source`.
+    pub world_folders: Vec<String>,
 }
 
 /// Why the output cannot be swapped in.
@@ -273,5 +277,7 @@ pub fn verify(out: &Path, source: Option<&Path>) -> Result<VerifyOutcome, Verify
     Ok(VerifyOutcome {
         source: recorded,
         forced: complete.forced,
+        layout: state.layout,
+        world_folders: state.world_folders,
     })
 }

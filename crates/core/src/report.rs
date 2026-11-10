@@ -76,6 +76,15 @@ pub struct ScanReport {
     pub dimensions: Vec<DimensionReport>,
 }
 
+impl ScanReport {
+    /// Whether any trust check failed or could not be confirmed (would stop `gc --out`).
+    pub fn has_stops(&self) -> bool {
+        self.trust
+            .iter()
+            .any(|t| matches!(t.status, TrustStatus::Fail | TrustStatus::Unknown))
+    }
+}
+
 /// The `wgc gc` report (`wgc.gc/1`): the scan report plus what `gc` did.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GcReport {
@@ -287,21 +296,30 @@ pub struct BoundaryJson {
     pub max: [i32; 2],
 }
 
+/// Locks the world for a read-only report if possible; otherwise warns
+/// ([`Warning::LockUnavailable`]) and continues. Keep the returned locks alive while reading.
+pub fn try_lock_for_report(
+    layout: &WorldLayout,
+    observer: &dyn Observer,
+) -> (LockStatus, Option<SessionLocks>) {
+    let locks = SessionLocks::try_acquire_all(layout);
+    let lock = LockStatus::from_result(&locks);
+    match locks {
+        Ok(held) => (lock, Some(held)),
+        Err(e) => {
+            observer.warn(Warning::LockUnavailable(e));
+            (lock, None)
+        }
+    }
+}
+
 /// Runs `wgc scan`: locks if possible, plans every dimension and checks trust.
 pub fn run_scan(
     layout: &WorldLayout,
     observer: &dyn Observer,
     cancel: &AtomicBool,
 ) -> Result<ScanReport, ReportError> {
-    let locks = SessionLocks::try_acquire_all(layout);
-    let lock = LockStatus::from_result(&locks);
-    let _held = match locks {
-        Ok(held) => Some(held),
-        Err(e) => {
-            observer.warn(Warning::LockUnavailable(e));
-            None
-        }
-    };
+    let (lock, _held) = try_lock_for_report(layout, observer);
     let plan = build_plan(layout, &PlanOptions::default(), observer, cancel)?;
     let trust = check_trust(&plan);
     scan_report(&plan, &trust, lock)

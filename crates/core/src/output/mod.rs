@@ -47,6 +47,9 @@ pub struct GcOutcome {
     pub out: PathBuf,
     /// Whether some output files could not get their original owner.
     pub owner_not_preserved: bool,
+    /// Whether some world folder was not locked because `session.lock` was
+    /// missing and L-1 was forced.
+    pub lock_skipped: bool,
 }
 
 /// One failed verification check.
@@ -217,7 +220,9 @@ pub fn run_gc(
         }
     };
     drop(locks);
+    let lock_skipped = forced.contains(&GuardId::L1);
     Ok(GcOutcome {
+        lock_skipped,
         plan,
         trust,
         forced,

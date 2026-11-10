@@ -68,7 +68,7 @@ wgc --help
 | `VerifyError::Incomplete`、`SourceMismatch`、`Changed`、`InUse` | 5 |
 | `VerifyError::Io` | 4 |
 
-Ctrl-C を受けたら中断の旗を立て、core が戻るのを待って 130 で終わる。2回目の Ctrl-C ではすぐに終わる。
+Ctrl-C を受けたら中断の旗を立て、core が戻るのを待って 130 で終わる。core が戻った後に旗が立っていた場合も、`scan`、見積もり、`verify` では結果を出さずに 130 で終わる（`gc --out` が成功した後は、出力が完成しているので成功として扱う）。2回目の Ctrl-C ではすぐに終わる。
 
 ## 出力
 
@@ -85,7 +85,7 @@ Ctrl-C を受けたら中断の旗を立て、core が戻るのを待って 130 
 { "schema": "wgc.verify/1", "result": "ready", "source": "/abs/path", "changed": [], "forced": [] }
 ```
 
-`result`: `ready`、`incomplete`、`source_mismatch`、`changed`、`in_use`。
+`result`: `ready`、`incomplete`、`source_mismatch`、`changed`、`in_use`、`error`（読み込みの失敗。終了コード 4）。
 
 ## メッセージ
 

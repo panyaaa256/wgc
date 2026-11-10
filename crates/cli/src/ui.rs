@@ -14,8 +14,23 @@ use crate::messages;
 
 /// Whether to use ANSI colors on a stream (docs/spec/cli.md "出力").
 pub fn color_enabled(no_color_flag: bool, is_terminal: bool) -> bool {
-    let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-    let dumb = std::env::var_os("TERM").is_some_and(|v| v == "dumb");
+    color_allowed(
+        no_color_flag,
+        is_terminal,
+        std::env::var_os("NO_COLOR").as_deref(),
+        std::env::var_os("TERM").as_deref(),
+    )
+}
+
+/// The rule behind [`color_enabled`], with the environment passed in.
+fn color_allowed(
+    no_color_flag: bool,
+    is_terminal: bool,
+    no_color_env: Option<&std::ffi::OsStr>,
+    term: Option<&std::ffi::OsStr>,
+) -> bool {
+    let no_color = no_color_env.is_some_and(|v| !v.is_empty());
+    let dumb = term.is_some_and(|v| v == "dumb");
     is_terminal && !no_color && !dumb && !no_color_flag
 }
 
@@ -353,24 +368,18 @@ pub fn swap_steps(
     let bukkit = layout_kind == LayoutKind::Bukkit.as_str()
         || layout_kind == LayoutKind::BukkitLegacy.as_str();
     if bukkit {
-        writeln!(
-            out,
-            "  3. For each world folder ({}):",
-            world_folders.join(", ")
-        )?;
+        writeln!(out, "  3. Rename each world folder:")?;
         for f in world_folders {
             let src = source.join(f);
+            writeln!(out, "       {} -> {}.wgc-bak", src.display(), src.display())?;
+        }
+        writeln!(out, "  4. Move each new world folder into place:")?;
+        for f in world_folders {
             writeln!(
                 out,
-                "       rename {} to {}.wgc-bak",
-                src.display(),
-                src.display()
-            )?;
-            writeln!(
-                out,
-                "       move {} to {}",
+                "       {} -> {}",
                 output.join(f).display(),
-                src.display()
+                source.join(f).display()
             )?;
         }
         writeln!(out, "     Do not move {}.", output.join(".wgc").display())?;
@@ -427,8 +436,46 @@ mod tests {
     }
 
     #[test]
-    fn colors_need_a_terminal() {
-        assert!(!color_enabled(false, false));
-        assert!(!color_enabled(true, true));
+    fn color_rules() {
+        use std::ffi::OsStr;
+        let xterm = Some(OsStr::new("xterm"));
+        assert!(color_allowed(false, true, None, xterm));
+        assert!(
+            !color_allowed(false, false, None, xterm),
+            "needs a terminal"
+        );
+        assert!(!color_allowed(true, true, None, xterm), "--no-color");
+        assert!(
+            !color_allowed(false, true, Some(OsStr::new("1")), xterm),
+            "NO_COLOR"
+        );
+        assert!(
+            color_allowed(false, true, Some(OsStr::new("")), xterm),
+            "empty NO_COLOR is ignored"
+        );
+        assert!(
+            !color_allowed(false, true, None, Some(OsStr::new("dumb"))),
+            "TERM=dumb"
+        );
+    }
+
+    #[test]
+    fn bukkit_swap_steps_are_numbered() {
+        let mut out = Vec::new();
+        swap_steps(
+            &mut out,
+            "bukkit_legacy",
+            Path::new("/srv"),
+            &["world".to_owned(), "world_nether".to_owned()],
+            Path::new("/out"),
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        for n in 1..=6 {
+            assert!(
+                text.contains(&format!("  {n}. ")),
+                "step {n} missing:\n{text}"
+            );
+        }
     }
 }

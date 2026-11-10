@@ -83,7 +83,23 @@ pub fn reason(r: &ReasonJson) -> String {
 
 pub fn warning(w: &Warning) -> String {
     match w {
-        Warning::LockUnavailable(e) => format!("The world is in use. Results may be inaccurate. ({})", lock(e)),
+        Warning::LockUnavailable(e) => match e {
+            LockError::InUse { .. } | LockError::HeldByThisProcess { .. } => {
+                "The world is in use. Results may be inaccurate.".to_owned()
+            }
+            LockError::Missing { path } => format!(
+                "{} is missing, so a running game cannot be detected. Results may be inaccurate.",
+                path.display()
+            ),
+            LockError::NotWritable { path } => format!(
+                "Cannot open {} for writing, so the world could not be locked. Results may be inaccurate.",
+                path.display()
+            ),
+            LockError::Io { path, source } => format!(
+                "Cannot lock {} ({source}). Results may be inaccurate.",
+                path.display()
+            ),
+        },
         Warning::LockSkipped => "session.lock is missing: continuing without locking the world (--force).".to_owned(),
         Warning::PreLockVersion(v) => format!(
             "The world was last saved by an old version (data version {}). A running game cannot be detected.",
@@ -175,12 +191,20 @@ pub fn output(e: &OutputError) -> String {
         ),
         OutputError::Lock(l) => lock(l),
         OutputError::Stopped(ids) => {
+            let mut text = "Stopped. Nothing was written.".to_owned();
+            for id in ids {
+                text.push_str(&format!(
+                    "\n  {id} {}: {}",
+                    check_name(*id),
+                    stop_advice(*id)
+                ));
+            }
             let list: Vec<&str> = ids.iter().map(|i| i.as_str()).collect();
-            format!(
-                "Stopped by check(s) {}. Nothing was written. If you are sure InhabitedTime is reliable, run again with --force={}.",
-                list.join(", "),
+            text.push_str(&format!(
+                "\nRun `wgc scan` for details. To continue anyway, run again with --force={}.",
                 list.join(",")
-            )
+            ));
+            text
         }
         OutputError::InsufficientSpace { needed, available } => format!(
             "Not enough free space: {} needed, {} available.",
@@ -240,7 +264,31 @@ pub fn verify(e: &VerifyError) -> String {
     }
 }
 
+/// What ignoring a stop means.
+fn stop_advice(id: GuardId) -> &'static str {
+    match id {
+        GuardId::T1 | GuardId::T2 | GuardId::T3 => {
+            "InhabitedTime may be unreliable, so visited chunks could be deleted. Use --force only if you are sure it is reliable."
+        }
+        GuardId::T4 => {
+            "this world was saved by a newer version than wgc knows; its files may have changed format."
+        }
+        GuardId::T5 => "the forced chunks could not be read; with --force they are NOT protected.",
+        GuardId::L1 => {
+            "session.lock is missing, so a running game cannot be detected; make sure the game is stopped."
+        }
+    }
+}
+
 pub const READY: &str = "Ready to swap.";
+pub const INTERRUPTED: &str = "Interrupted.";
+pub const NOTHING_WRITTEN: &str =
+    "Nothing was written. Run again with --out <DIR> to write the result.";
+pub const DONE: &str = "Done:";
+
+pub fn unknown_dimension(id: &str) -> String {
+    format!("This world has no dimension {id}.")
+}
 
 pub fn forced_output(ids: &[String]) -> String {
     format!(
