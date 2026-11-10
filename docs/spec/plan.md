@@ -139,6 +139,7 @@ impl TriplePlan {
     pub fn action(&self, kind: FileKind) -> Option<FileAction>;      // ファイルがなければ None
     pub fn entry_fate(&self, kind: FileKind, index: ChunkIndex) -> EntryFate;
     pub fn external_action(&self, kind: FileKind, pos: ChunkPos) -> ExternalAction; // Copy | Omit
+    pub fn sizes(&self, kind: FileKind) -> Sizes;   // そのファイルと .mcc の現在と出力後のサイズ
 }
 
 pub struct FileInfo {
@@ -184,12 +185,13 @@ pub struct Sizes { pub before: u64, pub after: u64 }
 
 ```rust
 pub enum PlanError {
-    Io { path: PathBuf, source: io::Error },
+    Io { path: PathBuf, source: io::Error },   // ファイルを開けない・読めない（権限など）
+    Layout(LayoutError),                       // 列挙の失敗（同じ座標の2つの名前など）
     Cancelled,
 }
 ```
 
-読めないファイルや壊れたチャンクはエラーにせず、Plan の中で扱う（そのままコピー、内容エラー）。
+壊れたファイルや壊れたチャンクはエラーにせず、Plan の中で扱う（そのままコピー、内容エラー）。OS がファイルを読ませない場合（権限など）は、判断の材料がないので中止する。
 
 ## 受け入れ条件
 

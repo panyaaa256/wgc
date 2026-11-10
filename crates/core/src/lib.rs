@@ -8,6 +8,7 @@
 pub mod layout;
 pub mod lock;
 pub mod nbt;
+pub mod plan;
 pub mod region;
 pub mod types;
 pub mod versions;

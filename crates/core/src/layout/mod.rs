@@ -5,6 +5,7 @@
 
 mod data;
 mod files;
+mod walk;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -19,6 +20,7 @@ pub use data::{
     forced_chunks, paper_defaults_config, paper_world_config, player_data_dir, spawn_mobs,
 };
 pub use files::{DimensionFiles, TripleFiles, list_dimension_files};
+pub use walk::{WorldFile, WorldFiles, world_files};
 
 /// The four layouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -95,6 +97,8 @@ pub enum LayoutError {
     AmbiguousRegion { first: PathBuf, second: PathBuf },
     #[error("{first} and {second} are the same dimension")]
     DuplicateDimension { first: PathBuf, second: PathBuf },
+    #[error("symbolic link loop at {path}")]
+    SymlinkLoop { path: PathBuf },
     #[error("level.dat not found at {path}")]
     MissingLevelDat { path: PathBuf },
     #[error("cannot read {path}")]
