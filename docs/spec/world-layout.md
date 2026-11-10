@@ -86,6 +86,8 @@ pub struct Dimension {
 3. 3種別の座標の和集合を、座標の昇順で三つ組にする。サイズ 0 のファイルも含める。
 4. 各種別のフォルダの `.mcc` も三つ組に渡す。
 
+関数: `list_dimension_files(dim: &Dimension) -> Result<DimensionFiles, LayoutError>`。`DimensionFiles` は三つ組の一覧（`TripleFiles { pos, region, entities, poi }`）と、種別ごとの `.mcc` の対応（`ChunkPos` → パス）を持つ。同じ座標の `.mcc` が2つの名前で存在する場合も `AmbiguousRegion`。
+
 ## level.dat
 
 `main_world_folder/level.dat`（gzip NBT）。ない・読めない場合はエラー。
@@ -141,6 +143,8 @@ Bukkit 系ではゲームルールがワールドごとにある。
 - 読めない、または知らないバージョンなら「確認できない」（P4 で `protection_unknown`）。
 
 関数: `forced_chunks(layout: &WorldLayout, dim: &Dimension) -> Known<BTreeSet<ChunkPos>>`。
+
+ゲームルールは `spawn_mobs(layout, dim) -> Known<bool>`、プレイヤーデータの場所は `player_data_dir(layout)`、Paper の設定は `paper_world_config(layout, dim)` と `paper_defaults_config(layout)` で得る。
 
 ## Paper の設定ファイル
 

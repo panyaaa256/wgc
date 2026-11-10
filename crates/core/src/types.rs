@@ -232,6 +232,28 @@ impl FromStr for GuardId {
     }
 }
 
+/// A value that was read, or why it could not be confirmed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Known<T> {
+    Value(T),
+    Unknown(UnknownReason),
+}
+
+/// Why something could not be confirmed (docs/spec/trust.md).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UnknownReason {
+    UnreadableFile {
+        path: std::path::PathBuf,
+    },
+    UnexpectedValue {
+        path: std::path::PathBuf,
+        key: String,
+    },
+    UnknownVersion(DataVersion),
+    NoPlayersChecked,
+    ForcedChunksUnknown(std::collections::BTreeSet<DimensionId>),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

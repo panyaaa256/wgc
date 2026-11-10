@@ -8,8 +8,10 @@ use std::collections::BTreeSet;
 
 use nanonbt::{Read, SliceReader, Tag};
 
+use std::io::Read as _;
+
 use crate::types::{ChunkPos, DataVersion};
-use crate::versions::DV_CHUNK_ROOT;
+use crate::versions::{DV_CHUNK_ROOT, DV_GAMERULE_REGISTRY};
 
 /// Why bytes cannot be read as NBT (content error C-2).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -132,6 +134,203 @@ fn read_references(r: &mut SliceReader<'_>, out: &mut BTreeSet<ChunkPos>) -> Res
     })
 }
 
+/// Largest decompressed size accepted for `level.dat` and saved data files.
+const MAX_GZIP_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Decompresses a gzip file such as `level.dat` or a saved data file.
+pub fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, NbtError> {
+    let mut out = Vec::new();
+    flate2::read::MultiGzDecoder::new(bytes)
+        .take(MAX_GZIP_BYTES + 1)
+        .read_to_end(&mut out)
+        .map_err(|_| NbtError::Malformed)?;
+    if out.len() as u64 > MAX_GZIP_BYTES {
+        return Err(NbtError::Malformed);
+    }
+    Ok(out)
+}
+
+/// The value of a boolean game rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleValue {
+    /// Not stored: the rule has its default value.
+    Absent,
+    Value(bool),
+    /// Stored with an unexpected type or value.
+    Unreadable,
+}
+
+/// Fields of `level.dat` the tool needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LevelInfo {
+    pub data_version: Option<DataVersion>,
+    /// `doMobSpawning` / `minecraft:spawn_mobs` when stored in `level.dat` (before 4772).
+    pub spawn_mobs: RuleValue,
+}
+
+/// Reads [`LevelInfo`] from decompressed `level.dat` NBT.
+pub fn read_level_info(nbt: &[u8]) -> Result<LevelInfo, NbtError> {
+    let mut reader = root_compound(nbt)?;
+    let mut data_version = None;
+    let mut legacy = RuleValue::Absent; // Data.GameRules.doMobSpawning (String)
+    let mut registry = RuleValue::Absent; // Data.game_rules."minecraft:spawn_mobs" (Byte)
+    for_each_entry(&mut reader, |name, tag, r| {
+        if name != Some(b"Data") || tag != Tag::Compound {
+            return Ok(false);
+        }
+        for_each_entry(r, |name, tag, r| {
+            match (name, tag) {
+                (Some(b"DataVersion"), Tag::Int) => {
+                    data_version = Some(DataVersion(r.read_i32_be()?))
+                }
+                (Some(b"GameRules"), Tag::Compound) => {
+                    for_each_entry(r, |name, tag, r| {
+                        if name != Some(b"doMobSpawning") {
+                            return Ok(false);
+                        }
+                        legacy = if tag == Tag::String {
+                            match read_string_bytes(r)?.as_slice() {
+                                b"true" => RuleValue::Value(true),
+                                b"false" => RuleValue::Value(false),
+                                _ => RuleValue::Unreadable,
+                            }
+                        } else {
+                            RuleValue::Unreadable
+                        };
+                        Ok(tag == Tag::String)
+                    })?;
+                }
+                (Some(b"game_rules"), Tag::Compound) => registry = read_spawn_mobs(r)?,
+                _ => return Ok(false),
+            }
+            Ok(true)
+        })?;
+        Ok(true)
+    })?;
+    let spawn_mobs = match data_version {
+        Some(v) if v >= DV_GAMERULE_REGISTRY => registry,
+        _ => legacy,
+    };
+    Ok(LevelInfo {
+        data_version,
+        spawn_mobs,
+    })
+}
+
+/// Reads `minecraft:spawn_mobs` from a decompressed `game_rules.dat` (4772 and later).
+pub fn read_game_rules_file(nbt: &[u8]) -> Result<RuleValue, NbtError> {
+    let mut reader = root_compound(nbt)?;
+    let mut value = RuleValue::Absent;
+    for_each_entry(&mut reader, |name, tag, r| {
+        if name == Some(b"data") && tag == Tag::Compound {
+            value = read_spawn_mobs(r)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    })?;
+    Ok(value)
+}
+
+/// Reads `minecraft:spawn_mobs` (or `spawn_mobs`) as a Byte from a game rules compound.
+fn read_spawn_mobs(r: &mut SliceReader<'_>) -> Result<RuleValue, NbtError> {
+    let mut value = RuleValue::Absent;
+    for_each_entry(r, |name, tag, r| {
+        if !matches!(name, Some(b"minecraft:spawn_mobs" | b"spawn_mobs")) {
+            return Ok(false);
+        }
+        value = if tag == Tag::Byte {
+            match r.read_u8()? {
+                0 => RuleValue::Value(false),
+                1 => RuleValue::Value(true),
+                _ => RuleValue::Unreadable,
+            }
+        } else {
+            RuleValue::Unreadable
+        };
+        Ok(tag == Tag::Byte)
+    })?;
+    Ok(value)
+}
+
+/// Reads the `/forceload` chunks from a decompressed `chunks.dat` or `chunk_tickets.dat`.
+///
+/// Handles `data.Forced` (LongArray, before 4297) and `data.tickets` (4297 and
+/// later, `minecraft:forced` tickets only). A malformed ticket is an error so
+/// that the caller treats the protection as unknown.
+pub fn read_forced_chunks(nbt: &[u8]) -> Result<BTreeSet<ChunkPos>, NbtError> {
+    let mut reader = root_compound(nbt)?;
+    let mut out = BTreeSet::new();
+    for_each_entry(&mut reader, |name, tag, r| {
+        if name != Some(b"data") || tag != Tag::Compound {
+            return Ok(false);
+        }
+        for_each_entry(r, |name, tag, r| match (name, tag) {
+            (Some(b"Forced"), Tag::LongArray) => {
+                for _ in 0..nanonbt::read_count(r)? {
+                    out.insert(ChunkPos::from_packed(r.read_i64_be()?));
+                }
+                Ok(true)
+            }
+            (Some(b"tickets"), Tag::List) => {
+                let element = Tag::from_u8(r.read_u8()?)?;
+                let count = nanonbt::read_count(r)?;
+                if count > 0 && element != Tag::Compound {
+                    return Err(NbtError::Malformed);
+                }
+                for _ in 0..count {
+                    if let Some(pos) = read_forced_ticket(r)? {
+                        out.insert(pos);
+                    }
+                }
+                Ok(true)
+            }
+            (Some(b"Forced" | b"tickets"), _) => Err(NbtError::Malformed),
+            _ => Ok(false),
+        })?;
+        Ok(true)
+    })?;
+    Ok(out)
+}
+
+/// One ticket compound; returns its position if it is a `minecraft:forced` ticket.
+fn read_forced_ticket(r: &mut SliceReader<'_>) -> Result<Option<ChunkPos>, NbtError> {
+    let mut forced = false;
+    let mut pos = None;
+    for_each_entry(r, |name, tag, r| match (name, tag) {
+        (Some(b"type"), Tag::String) => {
+            forced = read_string_bytes(r)? == b"minecraft:forced";
+            Ok(true)
+        }
+        (Some(b"chunk_pos"), Tag::IntArray) => {
+            if nanonbt::read_count(r)? != 2 {
+                return Err(NbtError::Malformed);
+            }
+            pos = Some(ChunkPos::new(r.read_i32_be()?, r.read_i32_be()?));
+            Ok(true)
+        }
+        (Some(b"chunk_pos"), Tag::Long) => {
+            pos = Some(ChunkPos::from_packed(r.read_i64_be()?));
+            Ok(true)
+        }
+        (Some(b"chunk_pos"), _) => Err(NbtError::Malformed),
+        _ => Ok(false),
+    })?;
+    match (forced, pos) {
+        (true, Some(pos)) => Ok(Some(pos)),
+        (true, None) => Err(NbtError::Malformed),
+        (false, _) => Ok(None),
+    }
+}
+
+/// Reads a string payload as raw bytes (not decoded).
+fn read_string_bytes(r: &mut SliceReader<'_>) -> Result<Vec<u8>, NbtError> {
+    let len = r.read_u16_be()? as usize;
+    let mut bytes = vec![0; len];
+    r.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
 /// Checks the root header and returns a reader positioned at the root compound's payload.
 fn root_compound(nbt: &[u8]) -> Result<SliceReader<'_>, NbtError> {
     let mut reader = SliceReader::new(nbt);
@@ -148,8 +347,8 @@ fn root_compound(nbt: &[u8]) -> Result<SliceReader<'_>, NbtError> {
     Ok(reader)
 }
 
-/// Longest compound key the tool matches (`InhabitedTime`, `blending_data`).
-const MAX_NAME: usize = 16;
+/// Longest compound key the tool matches (`minecraft:spawn_mobs`).
+const MAX_NAME: usize = 32;
 
 /// Walks the entries of a compound. `visit` returns `true` when it consumed
 /// the value; otherwise the value is skipped. Names longer than [`MAX_NAME`]
@@ -194,6 +393,7 @@ pub(crate) mod test_util {
         LongArray(Vec<i64>),
         IntArray(Vec<i32>),
         List(Vec<i32>),
+        CompoundList(Vec<Vec<(&'static str, V)>>),
         Compound(Vec<(&'static str, V)>),
     }
 
@@ -203,7 +403,7 @@ pub(crate) mod test_util {
             V::Int(_) => 3,
             V::Long(_) => 4,
             V::Str(_) => 8,
-            V::List(_) => 9,
+            V::List(_) | V::CompoundList(_) => 9,
             V::Compound(_) => 10,
             V::IntArray(_) => 11,
             V::LongArray(_) => 12,
@@ -226,6 +426,18 @@ pub(crate) mod test_util {
                 out.extend_from_slice(&(items.len() as i32).to_be_bytes());
                 for i in items {
                     out.extend_from_slice(&i.to_be_bytes());
+                }
+            }
+            V::CompoundList(items) => {
+                out.push(10);
+                out.extend_from_slice(&(items.len() as i32).to_be_bytes());
+                for entries in items {
+                    for (k, v) in entries {
+                        out.push(tag(v));
+                        name(out, k);
+                        payload(out, v);
+                    }
+                    out.push(0);
                 }
             }
             V::IntArray(items) => {
@@ -439,6 +651,133 @@ mod tests {
         let mut nbt = doc(vec![("DataVersion", V::Int(1))]);
         nbt.pop(); // drop the root End tag
         assert_eq!(read_chunk_summary(&nbt), Err(NbtError::Truncated));
+    }
+
+    fn data(entries: Vec<(&'static str, V)>) -> Vec<u8> {
+        doc(vec![("Data", V::Compound(entries))])
+    }
+
+    #[test]
+    fn level_info_game_rule_formats() {
+        let legacy = |v: &'static str| {
+            data(vec![
+                ("DataVersion", V::Int(4325)),
+                ("GameRules", V::Compound(vec![("doMobSpawning", V::Str(v))])),
+            ])
+        };
+        let info = read_level_info(&legacy("false")).unwrap();
+        assert_eq!(info.data_version, Some(DataVersion(4325)));
+        assert_eq!(info.spawn_mobs, RuleValue::Value(false));
+        assert_eq!(
+            read_level_info(&legacy("true")).unwrap().spawn_mobs,
+            RuleValue::Value(true)
+        );
+        assert_eq!(
+            read_level_info(&legacy("maybe")).unwrap().spawn_mobs,
+            RuleValue::Unreadable
+        );
+
+        let registry = data(vec![
+            ("DataVersion", V::Int(4671)),
+            (
+                "game_rules",
+                V::Compound(vec![("minecraft:spawn_mobs", V::Byte(0))]),
+            ),
+        ]);
+        assert_eq!(
+            read_level_info(&registry).unwrap().spawn_mobs,
+            RuleValue::Value(false)
+        );
+
+        let absent = data(vec![
+            ("DataVersion", V::Int(4671)),
+            ("game_rules", V::Compound(vec![])),
+        ]);
+        assert_eq!(
+            read_level_info(&absent).unwrap().spawn_mobs,
+            RuleValue::Absent
+        );
+        let mistyped = data(vec![
+            ("DataVersion", V::Int(4671)),
+            (
+                "game_rules",
+                V::Compound(vec![("minecraft:spawn_mobs", V::Str("false"))]),
+            ),
+        ]);
+        assert_eq!(
+            read_level_info(&mistyped).unwrap().spawn_mobs,
+            RuleValue::Unreadable
+        );
+    }
+
+    #[test]
+    fn game_rules_file() {
+        let file = doc(vec![
+            ("DataVersion", V::Int(5023)),
+            (
+                "data",
+                V::Compound(vec![("minecraft:spawn_mobs", V::Byte(1))]),
+            ),
+        ]);
+        assert_eq!(read_game_rules_file(&file).unwrap(), RuleValue::Value(true));
+        let empty = doc(vec![("data", V::Compound(vec![]))]);
+        assert_eq!(read_game_rules_file(&empty).unwrap(), RuleValue::Absent);
+    }
+
+    #[test]
+    fn forced_chunk_formats() {
+        let forced = doc(vec![(
+            "data",
+            V::Compound(vec![("Forced", V::LongArray(vec![pack(-1, 2)]))]),
+        )]);
+        assert_eq!(
+            read_forced_chunks(&forced).unwrap(),
+            BTreeSet::from([ChunkPos::new(-1, 2)])
+        );
+
+        let ticket = |ty: &'static str, pos: V| {
+            vec![
+                ("type", V::Str(ty)),
+                ("level", V::Int(31)),
+                ("ticks_left", V::Long(0)),
+                ("chunk_pos", pos),
+            ]
+        };
+        let tickets = doc(vec![(
+            "data",
+            V::Compound(vec![(
+                "tickets",
+                V::CompoundList(vec![
+                    ticket("minecraft:forced", V::Long(pack(3, -4))),
+                    ticket("minecraft:forced", V::IntArray(vec![-5, 6])),
+                    ticket("minecraft:portal", V::IntArray(vec![7, 7])),
+                ]),
+            )]),
+        )]);
+        assert_eq!(
+            read_forced_chunks(&tickets).unwrap(),
+            BTreeSet::from([ChunkPos::new(3, -4), ChunkPos::new(-5, 6)])
+        );
+
+        let bad = doc(vec![(
+            "data",
+            V::Compound(vec![(
+                "tickets",
+                V::CompoundList(vec![ticket("minecraft:forced", V::IntArray(vec![1]))]),
+            )]),
+        )]);
+        assert_eq!(read_forced_chunks(&bad), Err(NbtError::Malformed));
+        let empty = doc(vec![("data", V::Compound(vec![]))]);
+        assert!(read_forced_chunks(&empty).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gunzip_round_trip() {
+        use std::io::Write;
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(b"level").unwrap();
+        assert_eq!(gunzip(&gz.finish().unwrap()).unwrap(), b"level");
+        assert_eq!(gunzip(b"not gzip"), Err(NbtError::Malformed));
     }
 
     /// Random corruption of a valid document must never panic.

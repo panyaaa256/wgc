@@ -5,6 +5,8 @@
 //! `docs/spec/types.md`). Modules are added phase by phase as described in
 //! `docs/spec.md`.
 
+pub mod layout;
+pub mod lock;
 pub mod nbt;
 pub mod region;
 pub mod types;

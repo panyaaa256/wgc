@@ -40,7 +40,7 @@ pub enum GuardId { T1, T2, T3, T4, T5, L1 }  // 表示と JSON は "T-1" ... "L-
 ```
 
 - チャンク座標を Long から戻す処理は `ChunkPos::from_packed` だけで行う（構造物の参照、`Forced`、`chunk_pos`）。
-- `UnknownReason` は trust.md で定義する。
+- `UnknownReason`（trust.md の「結果のモデル」に列挙）も `types` に置く。layout が「確認できない」を返すときに使うため。
 
 ## 派生と決定性
 
