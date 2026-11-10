@@ -34,7 +34,7 @@ GC の対象のディメンション（`plan.gc_dims`、指定がなければ全
 | `-1` | 合格 |
 | `default`、キーなし、ファイルなし | 既定値のファイルで判定（0 以上なら不合格、それ以外は合格） |
 
-負の値は `-1` と同じく無効として扱う。YAML を読めない、型が想定外なら「確認できない」。
+負の値は `-1` と同じく無効として扱う。YAML を読めない、型が想定外（途中のノードがマップでない場合を含む）なら「確認できない」。Paper 1.19 より前の `paper.yml` では、`world-settings.<ワールドフォルダ名>.fixed-chunk-inhabited-time`、なければ `world-settings.default.fixed-chunk-inhabited-time` で同じように判定する。
 
 ## T-2: モブのスポーン
 
@@ -51,6 +51,8 @@ Paper 1.21.5 以降では、ゲームルール `spawn_mobs`（旧 `doMobSpawning
 | `Pos` | Double の List（3 要素） | x、y、z |
 | `Dimension` | Int または String | Int は `0`、`-1`、`1` を `minecraft:overworld`、`minecraft:the_nether`、`minecraft:the_end` に対応させる。形式はタグの型で判断する |
 | `playerGameType` | Int | `3` はスペクテイター |
+
+プレイヤーデータのフォルダ、UUID の名前のプレイヤーファイル、`level.dat` のどれかを読めなければ「確認できない」（フォルダがないのはよい）。ホストのプレイヤーファイルと `Data.Player` の位置とディメンションが同じなら、1人として数える。
 
 各プレイヤーについて、次の場合は飛ばす: スペクテイター、`Dimension` がマップにないか GC の対象外、フィールドを読めない、チャンク `(floor(x / 16), floor(z / 16))` が存在しない、InhabitedTime が `Value` 以外。残りで `Value(0)` なら「該当」。
 

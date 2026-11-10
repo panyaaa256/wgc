@@ -153,6 +153,7 @@ Bukkit 系ではゲームルールがワールドごとにある。
 | ワールドごと（Bukkit 26.1 より前） | `<world_folder>/paper-world.yml` |
 | ワールドごと（Bukkit 26.1 以降） | `<ディメンションフォルダ>/paper-world.yml` |
 | サーバー全体の既定値 | `<server_root>/config/paper-world-defaults.yml` |
+| Paper 1.19 より前 | `<server_root>/paper.yml` の `world-settings.<ワールドフォルダ名>` と `world-settings.default`。`config/paper-world-defaults.yml` がなく `paper.yml` があるときだけ使う（1.19 で移行される） |
 
 ## エラー
 

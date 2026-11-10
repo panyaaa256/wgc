@@ -128,6 +128,61 @@ fn t1_paper_fixed_inhabited_time() {
 }
 
 #[test]
+fn t1_wrong_node_types_are_unexpected() {
+    let t = bukkit();
+    let r = t.path();
+    let world = r.join("world/paper-world.yml");
+    let t1 = |r: &std::path::Path| status(&report(r, PlanOptions::default()), GuardId::T1).clone();
+    for text in [
+        &b"chunks: 0\n"[..],
+        b"- a list\n",
+        b"chunks:\n  fixed-chunk-inhabited-time: [1]\n",
+    ] {
+        write(&world, text);
+        assert!(
+            matches!(
+                t1(r),
+                CheckStatus::Unknown(UnknownReason::UnexpectedValue { .. })
+            ),
+            "{}",
+            String::from_utf8_lossy(text)
+        );
+    }
+    write(&world, b"chunks:\n");
+    assert_eq!(t1(r), CheckStatus::Pass);
+}
+
+#[test]
+fn t1_legacy_paper_yml() {
+    let t = bukkit();
+    let r = t.path();
+    let t1 = |r: &std::path::Path| status(&report(r, PlanOptions::default()), GuardId::T1).clone();
+    write(
+        &r.join("paper.yml"),
+        b"world-settings:\n  default:\n    fixed-chunk-inhabited-time: 0\n",
+    );
+    assert!(
+        matches!(t1(r), CheckStatus::Fail(d) if matches!(&d[..], [TrustDetail::PaperFixedInhabitedTime { value: 0, .. }]))
+    );
+    // Per-world values override the default.
+    write(
+        &r.join("paper.yml"),
+        b"world-settings:\n  default:\n    fixed-chunk-inhabited-time: 0\n  world:\n    fixed-chunk-inhabited-time: -1\n  world_nether:\n    fixed-chunk-inhabited-time: -1\n",
+    );
+    assert_eq!(t1(r), CheckStatus::Pass);
+    // Once config/paper-world-defaults.yml exists, paper.yml is ignored.
+    write(
+        &r.join("paper.yml"),
+        b"world-settings:\n  default:\n    fixed-chunk-inhabited-time: 0\n",
+    );
+    write(
+        &r.join("config/paper-world-defaults.yml"),
+        b"chunks:\n  fixed-chunk-inhabited-time: -1\n",
+    );
+    assert_eq!(t1(r), CheckStatus::Pass);
+}
+
+#[test]
 fn t1_and_t2_do_not_apply_to_vanilla() {
     let t = vanilla();
     player(&t.path().join("playerdata"), UUID_A, V::Int(0), 20.0, 0);
@@ -191,6 +246,37 @@ fn t3_player_positions() {
             pos: ChunkPos::new(0, 0)
         }])
     );
+}
+
+#[test]
+fn t3_unreadable_player_file_is_unknown() {
+    let t = vanilla();
+    let dir = t.path().join("playerdata");
+    player(&dir, UUID_A, V::Int(0), 20.0, 0);
+    write(&dir.join(format!("{UUID_B}.dat")), b"truncated");
+    assert!(matches!(
+        status(&report(t.path(), PlanOptions::default()), GuardId::T3),
+        CheckStatus::Unknown(UnknownReason::UnreadableFile { .. })
+    ));
+}
+
+#[test]
+fn t3_host_with_a_player_file_is_counted_once() {
+    let t = vanilla();
+    player(&t.path().join("playerdata"), UUID_A, V::Int(0), 3.0, 0);
+    let host = V::Compound(vec![
+        ("Pos", V::DoubleList(vec![3.0, 64.0, 1.0])),
+        ("Dimension", V::Int(0)),
+        ("playerGameType", V::Int(0)),
+    ]);
+    level(
+        t.path(),
+        vec![("DataVersion", V::Int(4325)), ("Player", host)],
+    );
+    assert!(matches!(
+        status(&report(t.path(), PlanOptions::default()), GuardId::T3),
+        CheckStatus::Fail(d) if d.len() == 1
+    ));
 }
 
 #[test]

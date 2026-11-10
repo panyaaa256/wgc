@@ -880,20 +880,11 @@ mod tests {
 
     #[test]
     fn player_fields() {
-        let mut nbt = doc(vec![
+        let nbt = doc(vec![
             ("Dimension", V::Str("minecraft:the_nether")),
             ("playerGameType", V::Int(3)),
+            ("Pos", V::DoubleList(vec![-17.5, 64.0, 32.25])),
         ]);
-        // Append Pos as a list of three doubles by hand (the test writer has no Double).
-        nbt.pop();
-        nbt.extend_from_slice(&[9, 0, 3]);
-        nbt.extend_from_slice(b"Pos");
-        nbt.push(6);
-        nbt.extend_from_slice(&3i32.to_be_bytes());
-        for v in [-17.5f64, 64.0, 32.25] {
-            nbt.extend_from_slice(&v.to_be_bytes());
-        }
-        nbt.push(0);
         let p = read_player(&nbt).unwrap();
         assert_eq!(p.pos, Some([-17.5, 64.0, 32.25]));
         assert_eq!(
