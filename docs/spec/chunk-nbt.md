@@ -26,16 +26,23 @@
 
 ### 構造物の参照
 
-`References` の各 LongArray の各値を、チャンクの位置にする: `x = (v & 0xFFFFFFFF) as i32`、`z = (v >> 32) as i32`。構造物の ID は問わず、1つの集合にまとめる。
+`References` の各 LongArray の各値を `ChunkPos::from_packed` でチャンクの位置にする。構造物の ID は問わず、1つの集合にまとめる。
 
 ## ChunkSummary
 
 ```rust
 pub struct ChunkSummary {
-    pub data_version: Option<i32>,
-    pub inhabited_time: Option<i64>,     // None = タグなし、または型の違い
+    pub data_version: Option<DataVersion>,
+    pub inhabited_time: Option<i64>,       // None = タグなし、または型の違い。負の値もそのまま返す
     pub has_blending_data: bool,
-    pub structure_refs: Vec<(i32, i32)>, // 重複なし、昇順
+    pub structure_refs: BTreeSet<ChunkPos>,
+}
+
+pub enum NbtError {
+    Truncated,
+    InvalidTagType(u8),
+    InvalidString,
+    RootNotCompound,
 }
 ```
 

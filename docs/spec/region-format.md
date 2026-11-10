@@ -66,6 +66,16 @@ P4 は、構造エラーのあるファイルを含むリージョン三つ組�
 - サイズ 0 のファイルは構造エラーではなく、チャンクのないファイルとして扱う。
 - Paper の 1.16 以前の「Allow Saving of Oversized Chunks」は、リージョンファイルの形式を変えず、余ったデータを同じフォルダの別ファイル（`*.oversized.nbt` など）に書いていた。これらは他のファイルと同じくそのままコピーし、特別には扱わない。
 
+```rust
+pub enum StructuralId { S1, S2, S3, S4, S5, S6, S7, S8 }   // 表示と JSON は "S-1" など
+
+pub struct StructuralIssue {
+    pub kind: FileKind,
+    pub id: StructuralId,
+    pub index: Option<ChunkIndex>,   // ファイル全体の問題（S-1）なら None
+}
+```
+
 ### 内容エラー（チャンク単位）
 
 そのチャンクは残し、ペイロードはそのままコピーする。
@@ -75,12 +85,26 @@ P4 は、構造エラーのあるファイルを含むリージョン三つ組�
 | C-1 | 展開できない |
 | C-2 | NBT として読めない（P2 で検出） |
 
+```rust
+pub enum ContentError {
+    Decompress(DecompressError),     // C-1
+    Nbt(NbtError),                   // C-2（chunk-nbt.md）
+}
+
+pub enum DecompressError {
+    UnsupportedCompression(u8),      // 127 と不明な方式
+    Corrupt,                         // データの破損
+    Lz4Checksum,
+}
+```
+
 ## 読み取りの API（例）
 
-- `RegionFile::parse(bytes, rx, rz, mcc_names) -> RegionFile`（構造エラーの一覧を持つ）
-- `entries()`: 各チャンクのインデックス、位置、開始セクタ、セクタ数、タイムスタンプ、`L`、圧縮方式
-- `payload(index) -> &[u8]`
-- `decompress(payload, external: Option<&[u8]>) -> Result<Vec<u8>, ContentError>`
+- `RegionFile::parse(bytes: Vec<u8>, pos: RegionPos, mcc: &BTreeSet<ChunkPos>) -> RegionFile`（バイト列を所有し、構造エラーの一覧を持つ）
+- `issues() -> &[StructuralIssue]`
+- `entries()`: 各チャンクの `ChunkIndex`、`ChunkPos`、開始セクタ、セクタ数、タイムスタンプ、`L`、圧縮方式
+- `payload(index: ChunkIndex) -> Option<&[u8]>`
+- `decompress(payload: &[u8], external: Option<&[u8]>) -> Result<Vec<u8>, DecompressError>`
 
 ファイル全体をメモリに読み込んでよい。
 

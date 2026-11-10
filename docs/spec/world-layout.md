@@ -28,10 +28,10 @@
 
 ### 指定の誤りの検出
 
-| ID | 条件 | エラーメッセージ |
+| ID | 条件 | エラー |
 |---|---|---|
-| W-1 | Bukkit（26.1 より前）と判定したが、`<base>/DIM-1` か `<base>/DIM1` がワールドのディレクトリで、`<base>_nether/DIM-1` も `<base>_the_end/DIM1` もそうでない | `This looks like a vanilla server. Pass the world folder instead: wgc gc /srv/mc/world`（実行したコマンドのパスを `<root>/<base>` に置き換えて出す） |
-| W-2 | バニラと判定したが、ルートに `paper-world.yml` がある、またはルートの親に `bukkit.yml` か `spigot.yml` がある | `This looks like a world folder of a Bukkit-based server. Pass the server root folder instead.` |
+| W-1 | Bukkit（26.1 より前）と判定したが、`<base>/DIM-1` か `<base>/DIM1` がワールドのディレクトリで、`<base>_nether/DIM-1` も `<base>_the_end/DIM1` もそうでない | `LooksLikeVanillaServer { suggested: <root>/<base> }` |
+| W-2 | バニラと判定したが、ルートに `paper-world.yml` がある、またはルートの親に `bukkit.yml` か `spigot.yml` がある | `LooksLikeBukkitWorldFolder` |
 
 ## ディメンションマップ
 
@@ -46,25 +46,36 @@
 - シンボリックリンクは辿る。
 - マップにない場所のリージョンファイルは探さない（P7 でそのままコピーされる）。
 
+## WorldLayout
+
+判定の結果。P4 以降はこの型だけを使う。
+
 ```rust
+pub enum LayoutKind { VanillaLegacy, Vanilla, BukkitLegacy, Bukkit } // JSON: vanilla_legacy など
+
+pub struct WorldLayout {
+    pub root: PathBuf,                  // 入力のパス（正規化済み）
+    pub kind: LayoutKind,
+    pub base: Option<String>,           // Bukkit のときだけ
+    pub main_world_folder: PathBuf,     // level.dat とプレイヤーデータの場所
+    pub world_folders: Vec<PathBuf>,    // ロックと出力の単位。昇順
+    pub server_root: Option<PathBuf>,   // Bukkit のときだけ、ルート
+    pub data_version: Option<DataVersion>, // level.dat の値
+    pub dimensions: Vec<Dimension>,     // ID の昇順
+}
+
 pub struct Dimension {
-    pub id: String,
-    pub dir: PathBuf,           // ディメンションフォルダ
-    pub world_folder: PathBuf,  // session.lock の場所
+    pub id: DimensionId,
+    pub dir: PathBuf,                   // ディメンションフォルダ
+    pub world_folder: PathBuf,          // session.lock の場所
 }
 ```
 
-| レイアウト | `world_folder` |
-|---|---|
-| バニラ | ルート |
-| Bukkit（26.1 以降） | `<base>/` |
-| Bukkit（26.1 より前） | そのディメンションを含む `<base>`、`<base>_nether`、`<base>_the_end`、または兄弟のフォルダ |
-
-ワールド全体として次も持つ。
-
-- `main_world_folder`: `level.dat` とプレイヤーデータの場所。バニラはルート、Bukkit は `<base>/`。
-- `world_folders`: すべてのワールドフォルダ。ロックと出力の単位。
-- `server_root`: Bukkit のときだけ、ルート。
+| レイアウト | `main_world_folder` | `world_folder` |
+|---|---|---|
+| バニラ | ルート | ルート |
+| Bukkit（26.1 以降） | `<base>/` | `<base>/` |
+| Bukkit（26.1 より前） | `<base>/` | そのディメンションを含む `<base>`、`<base>_nether`、`<base>_the_end`、または兄弟のフォルダ |
 
 ## リージョン三つ組の列挙
 
@@ -129,6 +140,8 @@ Bukkit 系ではゲームルールがワールドごとにある。
 - ファイルがなければ、強制読み込みチャンクはない。
 - 読めない、または知らないバージョンなら「確認できない」（P4 で `protection_unknown`）。
 
+関数: `forced_chunks(layout: &WorldLayout, dim: &Dimension) -> Known<BTreeSet<ChunkPos>>`。
+
 ## Paper の設定ファイル
 
 | ファイル | 場所 |
@@ -136,6 +149,20 @@ Bukkit 系ではゲームルールがワールドごとにある。
 | ワールドごと（Bukkit 26.1 より前） | `<world_folder>/paper-world.yml` |
 | ワールドごと（Bukkit 26.1 以降） | `<ディメンションフォルダ>/paper-world.yml` |
 | サーバー全体の既定値 | `<server_root>/config/paper-world-defaults.yml` |
+
+## エラー
+
+```rust
+pub enum LayoutError {
+    NotAWorld { path: PathBuf },
+    LooksLikeVanillaServer { suggested: PathBuf },   // W-1
+    LooksLikeBukkitWorldFolder,                      // W-2
+    AmbiguousRegion { first: PathBuf, second: PathBuf },
+    MissingLevelDat { path: PathBuf },
+    UnreadableLevelDat { path: PathBuf, source: NbtError },
+    Io { path: PathBuf, source: io::Error },
+}
+```
 
 ## 受け入れ条件
 
