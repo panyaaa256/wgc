@@ -5,7 +5,7 @@
 ## コマンド
 
 ```
-wgc [-q | --quiet] [--no-color] <command>
+wgc [-q | --quiet | -v | --verbose] [--no-color] <command>
 wgc scan   <path> [--json] [--strict]
 wgc gc     <path> [-o | --out <dir>] [--dimension <id>]... [-f | --force[=<ids>]] [--json] [--strict]
 wgc verify <out> [--source <path>] [--json]
@@ -24,6 +24,7 @@ wgc --help
 | `-f`, `--force[=<ids>]` | 判定の信用に関する停止を無視する。`--force` だけならすべて、`--force=T-3,T-5` なら指定した ID だけ。不明な ID は引数の誤り |
 | `--source <path>` | `verify` で、記録された元のワールドの代わりに比べるパス |
 | `-q`, `--quiet` | 進捗と人向けの要約を出さない（警告とエラーは出す） |
+| `-v`, `--verbose` | 人向けの要約に一覧（不合格になった対象、整合性の問題、clean の対象、古い地形との境界）を出す（scan.md「ターミナル出力」）。`--quiet` と同時には指定できない（引数の誤り） |
 | `--no-color` | 色を使わない |
 
 ## 停止と `--force`

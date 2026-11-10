@@ -33,4 +33,9 @@ fn gc_help_says_nothing_is_written_without_out() {
 fn usage_errors_exit_with_2() {
     assert_eq!(wgc(&[]).status.code(), Some(2));
     assert_eq!(wgc(&["gc", "w", "--force=T-9"]).status.code(), Some(2));
+    assert_eq!(wgc(&["-q", "-v", "scan", "w"]).status.code(), Some(2));
+    assert_eq!(
+        wgc(&["scan", "w", "--quiet", "--verbose"]).status.code(),
+        Some(2)
+    );
 }

@@ -7,6 +7,8 @@ use wgc_core::plan::PlanError;
 use wgc_core::report::{DetailJson, Notice, ReasonJson, ReportError};
 use wgc_core::types::{GuardId, Warning};
 
+use crate::ui::ListCounts;
+
 pub fn notice(n: Notice) -> &'static str {
     match n {
         Notice::PregeneratedChunks => {
@@ -28,6 +30,51 @@ pub fn older_chunks(n: u64) -> String {
     format!(
         "{n} chunks are in an older format. {}",
         notice(Notice::RunOfficialOptimize)
+    )
+}
+
+pub const VERBOSE_HINT: &str = "(run with --verbose for details)";
+
+fn count(n: u64, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// The counts of the lists the default summary leaves out; `None` when there is nothing.
+pub fn also_found(counts: &ListCounts, temp_files: u64) -> Option<String> {
+    let parts: Vec<String> = [
+        (counts.integrity, "integrity problem", "integrity problems"),
+        (counts.empty_files, "empty file", "empty files"),
+        (
+            counts.orphans,
+            "entity/POI entry without a chunk",
+            "entity/POI entries without a chunk",
+        ),
+        (
+            temp_files,
+            "leftover player data temp file",
+            "leftover player data temp files",
+        ),
+        (
+            counts.seams,
+            "seam with old terrain",
+            "seams with old terrain",
+        ),
+    ]
+    .into_iter()
+    .filter(|(n, ..)| *n > 0)
+    .map(|(n, one, many)| count(n, one, many))
+    .collect();
+    (!parts.is_empty()).then(|| format!("Also found: {}", parts.join(", ")))
+}
+
+pub fn temp_files_not_copied(n: u64) -> String {
+    format!(
+        "Also not copied: {}",
+        count(
+            n,
+            "leftover player data temp file",
+            "leftover player data temp files"
+        )
     )
 }
 

@@ -60,15 +60,23 @@ fn summary_sink(json: bool, quiet: bool) -> Option<Box<dyn Write>> {
     }
 }
 
-fn sink_style(json: bool, no_color: bool) -> ui::Style {
-    use std::io::IsTerminal;
-    let tty = if json {
-        std::io::stderr().is_terminal()
+/// Colors, terminal width and verbosity for the stream [`summary_sink`] picks.
+fn sink_format(json: bool, cli: &Cli) -> ui::SummaryFormat {
+    let term = if json {
+        console::Term::stderr()
     } else {
-        std::io::stdout().is_terminal()
+        console::Term::stdout()
     };
-    ui::Style {
-        color: ui::color_enabled(no_color, tty),
+    let tty = term.is_term();
+    ui::SummaryFormat {
+        style: ui::Style {
+            color: ui::color_enabled(cli.no_color, tty),
+        },
+        width: tty
+            .then(|| term.size_checked())
+            .flatten()
+            .map(|(_, cols)| usize::from(cols)),
+        verbose: cli.verbose,
     }
 }
 
@@ -132,7 +140,7 @@ fn scan(a: &ScanArgs, cli: &Cli, term: &Terminal) -> u8 {
             &report,
             &layout.root,
             SummaryKind::Scan,
-            sink_style(a.json, cli.no_color),
+            sink_format(a.json, cli),
         );
     }
     if a.json
@@ -191,7 +199,7 @@ fn gc_estimate(
             &report.scan,
             &layout.root,
             SummaryKind::Estimate,
-            sink_style(a.json, cli.no_color),
+            sink_format(a.json, cli),
         );
         let _ = writeln!(out, "{}", messages::NOTHING_WRITTEN);
     }
@@ -254,13 +262,14 @@ fn gc_output(
         Err(e) => return report_error(&e, "gc", term),
     };
     if let Some(mut sink) = summary_sink(a.json, cli.quiet) {
-        let style = sink_style(a.json, cli.no_color);
+        let format = sink_format(a.json, cli);
+        let style = format.style;
         let _ = ui::summary(
             &mut sink,
             &report.scan,
             &layout.root,
             SummaryKind::Output,
-            style,
+            format,
         );
         let _ = writeln!(
             sink,
@@ -313,7 +322,7 @@ fn verify(a: &VerifyArgs, cli: &Cli, term: &Terminal) -> u8 {
     match &result {
         Ok(ok) => {
             if let Some(mut sink) = summary_sink(a.json, cli.quiet) {
-                let style = sink_style(a.json, cli.no_color);
+                let style = sink_format(a.json, cli).style;
                 let _ = writeln!(sink, "{}", style.green(messages::READY));
                 if !ok.forced.is_empty() {
                     let _ = writeln!(
