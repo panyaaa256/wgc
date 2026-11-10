@@ -20,7 +20,7 @@ pub use data::{
     forced_chunks, paper_defaults_config, paper_world_config, player_data_dir, spawn_mobs,
 };
 pub use files::{DimensionFiles, TripleFiles, list_dimension_files};
-pub use walk::{WorldFile, WorldFiles, world_files};
+pub use walk::{WorldFile, WorldFiles, files_in, world_files};
 
 /// The four layouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

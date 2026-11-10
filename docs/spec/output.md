@@ -7,7 +7,7 @@
 ```rust
 pub fn run_gc(
     layout: &WorldLayout,
-    options: &GcOptions,         // out, gc_dims, forced: BTreeSet<GuardId>
+    options: &GcOptions,         // out, gc_dims, allowed: BTreeSet<GuardId>（--force で続行を許す ID）
     observer: &dyn Observer,
     cancel: &AtomicBool,
 ) -> Result<GcOutcome, OutputError>;   // GcOutcome: Plan、TrustReport、forced、ScanReport の材料
@@ -139,7 +139,7 @@ pub fn verify(out: &Path, source: Option<&Path>) -> Result<VerifyOutcome, Verify
 ```rust
 pub enum OutputError {
     OutputNotEmpty { path: PathBuf },
-    OutputOverlapsSource { out: PathBuf, source: PathBuf },
+    OutputOverlapsSource { out: PathBuf, world: PathBuf },
     Lock(LockError),
     Stopped(Vec<GuardId>),                 // 信用の確認か L-1 で止まった
     InsufficientSpace { needed: u64, available: u64 },

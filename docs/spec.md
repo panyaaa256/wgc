@@ -75,7 +75,7 @@ wgc verify <out>                     # 書き戻してよいかの確認
 | lz4_flex | LZ4 のブロックの展開 | core |
 | xxhash-rust（`xxh32`） | LZ4 のチェックサム | core |
 | yaml-rust2 | Paper の設定 | core |
-| libc / windows-sys | ロック | core（`lock::sys` の中だけ） |
+| libc / windows-sys | ロック | core（`sys` の中だけ） |
 | thiserror | エラー | core |
 | serde、serde_json | JSON | core（`report`、`output`） |
 | rayon | 並列化 | core |

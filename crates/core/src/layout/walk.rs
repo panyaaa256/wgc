@@ -20,8 +20,10 @@ pub struct WorldFiles {
     pub files: Vec<WorldFile>,
     /// Directories, including empty ones.
     pub dirs: Vec<PathBuf>,
-    /// Entries that are neither regular files nor directories.
+    /// Entries that are neither regular files nor directories, and dangling links.
     pub special: Vec<PathBuf>,
+    /// Symbolic links that were followed.
+    pub links: Vec<PathBuf>,
 }
 
 /// Walks all world folders, following symbolic links like the game does.
@@ -31,8 +33,13 @@ pub struct WorldFiles {
 /// that is its own ancestor, is an error. A dangling link is reported in
 /// `special`. Entries are visited in name order.
 pub fn world_files(layout: &WorldLayout) -> Result<WorldFiles, LayoutError> {
+    files_in(&layout.world_folders)
+}
+
+/// Like [`world_files`], for any list of folders.
+pub fn files_in(folders: &[PathBuf]) -> Result<WorldFiles, LayoutError> {
     let mut out = WorldFiles::default();
-    for folder in &layout.world_folders {
+    for folder in folders {
         walk(folder, false, &mut Vec::new(), &mut out)?;
     }
     out.files.sort();
@@ -41,6 +48,8 @@ pub fn world_files(layout: &WorldLayout) -> Result<WorldFiles, LayoutError> {
     out.dirs.dedup();
     out.special.sort();
     out.special.dedup();
+    out.links.sort();
+    out.links.dedup();
     Ok(out)
 }
 
@@ -75,6 +84,9 @@ fn walk(
             }
             Err(e) => return Err(LayoutError::io(&path, e)),
         };
+        if is_link {
+            out.links.push(path.clone());
+        }
         if meta.is_dir() {
             walk(&path, via_symlink || is_link, ancestors, out)?;
         } else if meta.is_file() {

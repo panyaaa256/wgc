@@ -1,6 +1,6 @@
 # session.lock のロック（P3）
 
-実装先: `core::lock`。unsafe は `core::lock::sys` の中だけに置く。
+実装先: `core::lock`。OS の呼び出し（unsafe）は `core::sys` の中だけに置く（空き容量と実行ユーザーの判定も同じ場所）。
 
 ## 要件
 

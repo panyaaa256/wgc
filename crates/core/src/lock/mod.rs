@@ -3,9 +3,7 @@
 //! The lock must exclude Java's `FileChannel.tryLock`, which uses POSIX
 //! record locks on Unix and `LockFileEx` on Windows. `flock` (and therefore
 //! `std::fs::File::try_lock`) does not conflict with POSIX locks on Linux,
-//! so it must not be used. All unsafe code is in [`sys`].
-
-mod sys;
+//! so it must not be used. The platform calls are in `crate::sys`.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
@@ -92,7 +90,7 @@ impl SessionLock {
                     source: e,
                 },
             })?;
-        match sys::try_lock(&file) {
+        match crate::sys::try_lock(&file) {
             Ok(true) => {
                 held.insert(path.clone());
                 Ok(SessionLock {

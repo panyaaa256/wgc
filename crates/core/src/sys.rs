@@ -1,4 +1,5 @@
-//! Platform lock calls. The only unsafe code of the crate.
+//! Platform calls: file locks, free disk space, privileges.
+//! The only unsafe code of the crate.
 
 use std::fs::File;
 use std::io;
@@ -6,7 +7,7 @@ use std::io;
 /// Tries to take an exclusive lock on the whole file without waiting.
 /// Returns `Ok(false)` if another process holds a conflicting lock.
 #[cfg(unix)]
-pub(super) fn try_lock(file: &File) -> io::Result<bool> {
+pub(crate) fn try_lock(file: &File) -> io::Result<bool> {
     use std::os::fd::AsRawFd;
 
     // Open file description locks conflict with the POSIX locks Java uses and,
@@ -36,7 +37,7 @@ pub(super) fn try_lock(file: &File) -> io::Result<bool> {
 }
 
 #[cfg(windows)]
-pub(super) fn try_lock(file: &File) -> io::Result<bool> {
+pub(crate) fn try_lock(file: &File) -> io::Result<bool> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, ERROR_LOCK_VIOLATION, HANDLE};
     use windows_sys::Win32::Storage::FileSystem::{
@@ -67,4 +68,59 @@ pub(super) fn try_lock(file: &File) -> io::Result<bool> {
         }
         _ => Err(err),
     }
+}
+
+/// Bytes available to this user on the filesystem that holds `path`.
+#[cfg(unix)]
+pub(crate) fn available_space(path: &std::path::Path) -> io::Result<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))?;
+    // SAFETY: `statvfs` is plain data; zero is a valid value.
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `c_path` is a valid C string and `stat` a valid out pointer.
+    if unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // The field types differ between platforms (u32 on some, u64 on others).
+    #[allow(clippy::useless_conversion)]
+    Ok(u64::from(stat.f_bavail).saturating_mul(u64::from(stat.f_frsize)))
+}
+
+#[cfg(windows)]
+pub(crate) fn available_space(path: &std::path::Path) -> io::Result<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0u64;
+    // SAFETY: `wide` is NUL-terminated; the out pointers are valid or null.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(available)
+}
+
+/// Whether the process runs as root (and may change file owners).
+#[cfg(unix)]
+pub(crate) fn is_root() -> bool {
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    unsafe { libc::geteuid() == 0 }
+}
+
+/// The effective user ID of the process.
+#[cfg(unix)]
+pub(crate) fn effective_uid() -> u32 {
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
 }
