@@ -48,6 +48,8 @@ fn player(dir: &std::path::Path, uuid: &str, dim: V, x: f64, game_type: i32) {
 
 const UUID_A: &str = "00000000-0000-0000-0000-00000000000a";
 const UUID_B: &str = "00000000-0000-0000-0000-00000000000b";
+const UUID_C: &str = "00000000-0000-0000-0000-00000000000c";
+const UUID_D: &str = "00000000-0000-0000-0000-00000000000d";
 
 fn report(path: &std::path::Path, options: PlanOptions) -> TrustReport {
     let layout = crate::layout::detect(path).unwrap();
@@ -353,6 +355,68 @@ fn t4_and_t5_and_stops() {
         status(&r, GuardId::T4),
         CheckStatus::Unknown(UnknownReason::UnknownVersion(_))
     ));
+}
+
+#[test]
+fn checks_before_the_plan_match_the_checks_against_the_plan() {
+    let t = vanilla();
+    write(&t.path().join("data/chunks.dat"), b"broken");
+    let players = t.path().join("playerdata");
+    // In chunk 0 (InhabitedTime 0), chunk 1 (> 0), a missing chunk, and the end.
+    player(&players, UUID_A, V::Int(0), 8.0, 0);
+    player(&players, UUID_B, V::Int(0), 24.0, 0);
+    player(&players, UUID_C, V::Int(0), 5000.0, 0);
+    player(&players, UUID_D, V::Int(1), 8.0, 0);
+    let layout = crate::layout::detect(t.path()).unwrap();
+
+    let early = check_trust_before_plan(&layout, None, false);
+    assert_eq!(early, report(t.path(), PlanOptions::default()));
+    assert!(
+        matches!(status(&early, GuardId::T3), CheckStatus::Fail(d) if matches!(&d[..], [TrustDetail::PlayerInZeroChunk { uuid, .. }] if uuid == UUID_A))
+    );
+    assert_eq!(early.stops(), BTreeSet::from([GuardId::T3, GuardId::T5]));
+
+    let end = PlanOptions {
+        gc_dims: Some(BTreeSet::from([DimensionId::the_end()])),
+    };
+    assert_eq!(
+        check_trust_before_plan(&layout, end.gc_dims.as_ref(), false),
+        report(t.path(), end)
+    );
+}
+
+#[test]
+fn t3_can_be_skipped_before_the_plan() {
+    let t = vanilla();
+    player(&t.path().join("playerdata"), UUID_A, V::Int(0), 8.0, 0);
+    let layout = crate::layout::detect(t.path()).unwrap();
+    let skipped = check_trust_before_plan(&layout, None, true);
+    let without_t3: Vec<_> = report(t.path(), PlanOptions::default())
+        .checks
+        .into_iter()
+        .filter(|c| c.id != GuardId::T3)
+        .collect();
+    assert_eq!(skipped.checks, without_t3);
+    assert!(skipped.stops().is_empty());
+}
+
+#[test]
+fn t3_before_the_plan_reads_external_chunks() {
+    let t = vanilla();
+    let nbt = doc(vec![
+        ("DataVersion", V::Int(4325)),
+        ("InhabitedTime", V::Long(0)),
+    ]);
+    write(
+        &t.path().join("region/r.0.0.mca"),
+        &build(&[chunk(0, 2 + crate::region::EXTERNAL_FLAG, b"")]),
+    );
+    write(&t.path().join("region/c.0.0.mcc"), &zlib(&nbt));
+    player(&t.path().join("playerdata"), UUID_A, V::Int(0), 8.0, 0);
+    let layout = crate::layout::detect(t.path()).unwrap();
+    let early = check_trust_before_plan(&layout, None, false);
+    assert_eq!(early, report(t.path(), PlanOptions::default()));
+    assert!(matches!(status(&early, GuardId::T3), CheckStatus::Fail(_)));
 }
 
 #[test]
