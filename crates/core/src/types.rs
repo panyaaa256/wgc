@@ -36,6 +36,12 @@ impl ChunkPos {
         }
     }
 
+    /// Packs into the game's `long` form; inverse of [`ChunkPos::from_packed`].
+    #[cfg(test)]
+    pub(crate) const fn to_packed(self) -> i64 {
+        (self.x as u32 as i64) | ((self.z as i64) << 32)
+    }
+
     /// The region that contains this chunk.
     pub const fn region(self) -> RegionPos {
         RegionPos {
@@ -232,7 +238,7 @@ mod tests {
 
     #[test]
     fn from_packed_restores_negative_coordinates() {
-        let pack = |x: i32, z: i32| (x as u32 as i64) | ((z as i64) << 32);
+        let pack = |x: i32, z: i32| ChunkPos::new(x, z).to_packed();
         for (x, z) in [
             (0, 0),
             (-1, 2),

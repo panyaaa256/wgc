@@ -6,8 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use nanonbt::route::LongArray;
-use nanonbt::{DeserializeNbtArray, Read, SliceReader, Tag};
+use nanonbt::{Read, SliceReader, Tag};
 
 use crate::types::{ChunkPos, DataVersion};
 use crate::versions::DV_CHUNK_ROOT;
@@ -64,20 +63,21 @@ pub fn read_chunk_summary(nbt: &[u8]) -> Result<ChunkSummary, NbtError> {
                 has_blending_data = true;
                 nanonbt::skip_nbt(r, tag)?;
             }
-            (Some(b"Level"), Tag::Compound) => read_fields(r, &mut level, b"Structures")?,
+            (Some(b"Level"), Tag::Compound) => {
+                for_each_entry(r, |n, t, r| level.visit(n, t, r, b"Structures"))?;
+            }
             _ => return root.visit(name, tag, r, b"structures"),
         }
         Ok(true)
     })?;
 
-    let fields = match data_version {
-        Some(v) if v >= DV_CHUNK_ROOT => root,
-        _ => level,
-    };
+    let modern = matches!(data_version, Some(v) if v >= DV_CHUNK_ROOT);
+    let fields = if modern { root } else { level };
     Ok(ChunkSummary {
         data_version,
         inhabited_time: fields.inhabited_time,
-        has_blending_data,
+        // blending_data only exists in the root format.
+        has_blending_data: has_blending_data && modern,
         structure_refs: fields.structure_refs,
     })
 }
@@ -101,8 +101,11 @@ impl Fields {
         match (name, tag) {
             (Some(b"InhabitedTime"), Tag::Long) => self.inhabited_time = Some(r.read_i64_be()?),
             (Some(n), Tag::Compound) if n == structures_key => {
+                // Like the game, the last occurrence of a duplicated key wins.
+                self.structure_refs.clear();
                 for_each_entry(r, |name, tag, r| {
                     if name == Some(b"References") && tag == Tag::Compound {
+                        self.structure_refs.clear();
                         read_references(r, &mut self.structure_refs)?;
                         Ok(true)
                     } else {
@@ -116,22 +119,15 @@ impl Fields {
     }
 }
 
-fn read_fields(
-    r: &mut SliceReader<'_>,
-    fields: &mut Fields,
-    structures_key: &[u8],
-) -> Result<(), NbtError> {
-    for_each_entry(r, |name, tag, r| fields.visit(name, tag, r, structures_key))
-}
-
 /// `References`: structure id -> LongArray of packed chunk positions.
 fn read_references(r: &mut SliceReader<'_>, out: &mut BTreeSet<ChunkPos>) -> Result<(), NbtError> {
     for_each_entry(r, |_, tag, r| {
         if tag != Tag::LongArray {
             return Ok(false);
         }
-        let values = <Vec<i64> as DeserializeNbtArray<LongArray>>::deserialize_nbt_array(r)?;
-        out.extend(values.into_iter().map(ChunkPos::from_packed));
+        for _ in 0..nanonbt::read_count(r)? {
+            out.insert(ChunkPos::from_packed(r.read_i64_be()?));
+        }
         Ok(true)
     })
 }
@@ -158,6 +154,9 @@ const MAX_NAME: usize = 16;
 /// Walks the entries of a compound. `visit` returns `true` when it consumed
 /// the value; otherwise the value is skipped. Names longer than [`MAX_NAME`]
 /// are passed as `None` (they match no key the tool looks for).
+///
+/// Key names are compared as raw bytes and never validated, so whether a
+/// chunk is readable does not depend on the encoding of keys it ignores.
 fn for_each_entry<'a>(
     r: &mut SliceReader<'a>,
     mut visit: impl FnMut(Option<&[u8]>, Tag, &mut SliceReader<'a>) -> Result<bool, NbtError>,
@@ -168,7 +167,14 @@ fn for_each_entry<'a>(
         if tag == Tag::End {
             return Ok(());
         }
-        let name = nanonbt::read_name_into(r, &mut buf)?.map(|len| &buf[..len]);
+        let len = r.read_u16_be()? as usize;
+        let name = if len <= MAX_NAME {
+            r.read_exact(&mut buf[..len])?;
+            Some(&buf[..len])
+        } else {
+            r.skip(len)?;
+            None
+        };
         let consumed = visit(name, tag, r)?;
         if !consumed {
             nanonbt::skip_nbt(r, tag)?;
@@ -254,7 +260,7 @@ pub(crate) mod test_util {
     }
 
     pub fn pack(x: i32, z: i32) -> i64 {
-        (x as u32 as i64) | ((z as i64) << 32)
+        crate::types::ChunkPos::new(x, z).to_packed()
     }
 }
 
@@ -366,6 +372,44 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(s.inhabited_time, Some(-3));
+    }
+
+    #[test]
+    fn blending_data_only_counts_in_the_root_format() {
+        let blending = || V::Compound(vec![("min_section", V::Int(-4))]);
+        let old = read_chunk_summary(&doc(vec![
+            ("DataVersion", V::Int(2800)),
+            ("blending_data", blending()),
+        ]));
+        assert!(!old.unwrap().has_blending_data);
+        let none = read_chunk_summary(&doc(vec![("blending_data", blending())]));
+        assert!(!none.unwrap().has_blending_data);
+    }
+
+    #[test]
+    fn duplicated_structures_keep_the_last_one() {
+        let refs = |p: i64| {
+            V::Compound(vec![(
+                "References",
+                V::Compound(vec![("a", V::LongArray(vec![p]))]),
+            )])
+        };
+        let s = read_chunk_summary(&doc(vec![
+            ("DataVersion", V::Int(4000)),
+            ("structures", refs(pack(1, 1))),
+            ("structures", refs(pack(2, 2))),
+        ]))
+        .unwrap();
+        assert_eq!(s.structure_refs, BTreeSet::from([ChunkPos::new(2, 2)]));
+    }
+
+    #[test]
+    fn key_encoding_is_not_validated() {
+        // 0xFF is not valid modified UTF-8; an ignored key must not make the chunk unreadable.
+        let mut nbt = doc(vec![("DataVersion", V::Int(4000)), ("xPos", V::Int(1))]);
+        let at = nbt.windows(4).position(|w| w == b"xPos").unwrap();
+        nbt[at] = 0xFF;
+        assert!(read_chunk_summary(&nbt).is_ok());
     }
 
     #[test]

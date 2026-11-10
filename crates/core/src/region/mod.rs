@@ -113,10 +113,10 @@ pub struct StructuralIssue {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ContentError {
     /// C-1.
-    #[error("cannot decompress chunk")]
+    #[error("cannot decompress chunk: {0}")]
     Decompress(#[from] DecompressError),
     /// C-2.
-    #[error("cannot read chunk nbt")]
+    #[error("cannot read chunk nbt: {0}")]
     Nbt(#[from] crate::nbt::NbtError),
 }
 
