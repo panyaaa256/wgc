@@ -15,6 +15,7 @@ xxhash-rust.workspace = true
 nanonbt.workspace = true
 rayon.workspace = true
 yaml-rust2.workspace = true
+serde.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -23,4 +24,5 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile.workspace = true

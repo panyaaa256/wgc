@@ -14,7 +14,7 @@
 
 - レイアウト（`plan.layout` の種類、`base`、ワールドフォルダ）
 - `level.dat` の DataVersion
-- ロックの状態: `acquired`、`in_use`、`missing`、`not_writable`
+- ロックの状態: `acquired`、`in_use`（このプロセスが持っている場合を含む）、`missing`、`not_writable`、`error`
 - 信用の確認の全項目
 - 出力しない他のファイル（プレイヤーデータの一時ファイル）、本体のない `.dat_old`
 - 固定の注意文の ID
@@ -83,6 +83,8 @@ types.md「レポートと JSON」の規則に従う。一覧は省略しない�
 - `layout.kind`: `vanilla_legacy`、`vanilla`、`bukkit_legacy`、`bukkit`
 - `trust[].status`: `pass`、`fail`、`unknown`、`not_applicable`
 - `details` と `reason` は `TrustDetail`／`UnknownReason` を `kind` つきでシリアライズしたもの。
+- `integrity.content[]` は `{ "pos": [x, z], "kind": "decompress" | "nbt", "detail": "…" }`、`verbatim_triples[]` はリージョン座標 `[x, z]`。
+- 入力のパスの外にあるパス（ワールドフォルダを指定したときのサーバーの設定など）は、そのまま出す。
 
 ### `gc` の JSON
 
@@ -110,6 +112,8 @@ types.md「レポートと JSON」の規則に従う。一覧は省略しない�
 9. 固定の注意文
 
 `gc` の見積もりでは、1〜6、8、9 を出す。
+
+関数: `run_scan(layout, observer, cancel) -> Result<ScanReport, ReportError>`、`scan_report(plan, trust, lock)`、`gc_report(scan, out, forced, plan)`。`ReportError` は `NonUtf8Path` と `Plan(PlanError)`。
 
 ## 受け入れ条件
 
