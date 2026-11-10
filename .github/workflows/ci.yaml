@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keep `main` runs intact so every merged commit keeps its own CLI artifacts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep in sync with `rust-toolchain.toml`.
+  RUST_TOOLCHAIN: 1.99.1
+
+jobs:
+  lint:
+    name: Format & dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - parallel:
+          - name: Checkout repository
+            uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+            with:
+              persist-credentials: false
+          - name: Install cargo-deny and cargo-machete
+            uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941
+            with:
+              tool: cargo-deny,cargo-machete
+
+      # Deliberately left out of the block above: rustup populates the same
+      # `~/.cargo/bin` that `install-action` writes its binaries into.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          # Everything `rust-toolchain.toml` asks for, so no parallel step
+          # below has rustup fetch anything on demand.
+          components: rustfmt, clippy, rust-analyzer
+
+      # None of the three checks compiles anything, and the toolchain above
+      # leaves rustup nothing to fetch, so they contend over no shared lock.
+      - parallel:
+          - name: Check formatting
+            run: cargo fmt --all -- --check
+          - name: Check advisories, licenses and bans
+            run: cargo deny check
+          - name: Check for unused dependencies
+            run: cargo machete
+
+  # Split from `dist` below so the checks and the release build get a runner
+  # each.
+  rustdoc:
+    name: API docs (rustdoc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain and cache
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ""
+          components: ""
+          cache-key: rustdoc
+
+      - name: Check rustdoc warnings
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
+  # Intentionally not gated on `test`: waiting would give back exactly the wall
+  # clock the split was meant to save, and a red run is already flagged as red.
+  dist:
+    name: CLI / ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      # Keep the OS/target pairs in sync with the `test` matrix in `test.yaml`.
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - name: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain and cache
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+          components: ""
+          cache-key: dist-${{ matrix.target }}
+
+      - name: Build and package CLI
+        uses: ./.github/actions/package-cli
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Smoke-test packaged CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          SMOKE="$(mktemp -d)"
+          tar -xzf "wgc-${{ matrix.target }}.tar.gz" -C "$SMOKE"
+          BIN="$SMOKE/wgc"
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN="$SMOKE/wgc.exe"; fi
+          "$BIN" --help >/dev/null
+          # A missing world is a layout error (exit 4).
+          status=0
+          "$BIN" scan "$SMOKE/world" --json >/dev/null 2>&1 || status=$?
+          [ "$status" -eq 4 ]
+          # Smallest world wgc recognizes: level.dat (DataVersion 4325),
+          # session.lock and one empty region file.
+          mkdir -p "$SMOKE/world/region"
+          printf '\012\000\000\012\000\004Data\003\000\013DataVersion\000\000\020\345\000\000' | gzip > "$SMOKE/world/level.dat"
+          printf '\342\230\203' > "$SMOKE/world/session.lock"
+          head -c 8192 /dev/zero > "$SMOKE/world/region/r.0.0.mca"
+          # Output is captured before grep: `grep -q` exits on the first match,
+          # and with `pipefail` a write into the closed pipe would fail the step.
+          out="$("$BIN" scan "$SMOKE/world" --json)"
+          grep -q '"schema": "wgc.scan/1"' <<<"$out"
+          # No player position can be checked, so `gc` stops on T-3 (exit 3)
+          # without writing the output.
+          status=0
+          "$BIN" -q gc "$SMOKE/world" -o "$SMOKE/out" >/dev/null 2>&1 || status=$?
+          [ "$status" -eq 3 ]
+          [ ! -e "$SMOKE/out" ]
+          out="$("$BIN" -q gc "$SMOKE/world" -o "$SMOKE/out" --force=T-3 --json)"
+          grep -q '"schema": "wgc.gc/1"' <<<"$out"
+          out="$("$BIN" verify "$SMOKE/out" --source "$SMOKE/world" --json)"
+          grep -q '"result": "ready"' <<<"$out"
+
+      - name: Upload CLI
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: wgc-${{ matrix.target }}
+          path: wgc-${{ matrix.target }}.tar.gz
+          if-no-files-found: error

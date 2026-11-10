@@ -1,0 +1,228 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to (re-)release, e.g. v0.1.0'
+        required: true
+
+permissions:
+  contents: read
+
+# A newer release waits for the running one instead of cancelling it, so a
+# release is never left half-published.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# Releases must not restore caches that other runs can write.
+cache-mode: none
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep in sync with `rust-toolchain.toml`.
+  RUST_TOOLCHAIN: 1.99.1
+
+jobs:
+  check-tag:
+    name: Check tag matches package version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      is_prerelease: ${{ steps.resolve.outputs.is_prerelease }}
+
+    steps:
+      - name: Resolve tag
+        id: resolve
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          case "$TAG" in
+            *-rc*) echo "is_prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "is_prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ steps.resolve.outputs.tag }}
+
+      # The tag and the workspace version must move together.
+      - name: Check version consistency
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          BASE="${TAG#v}"
+          BASE="${BASE%%-*}"
+          VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "$BASE" = "$VER" || {
+            echo "tag $TAG does not match workspace version $VER"
+            exit 1
+          }
+
+  test:
+    name: Gate (clippy + tests)
+    needs: check-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.check-tag.outputs.tag }}
+
+      - name: Setup Rust toolchain and cache
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ""
+          components: clippy
+          cache-key: release-test
+          lookup-only: true
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941
+        with:
+          tool: cargo-nextest
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo nextest run --workspace
+
+  dist:
+    name: CLI / ${{ matrix.name }}
+    needs: check-tag
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      # Keep in sync with the `test` matrix in test.yaml.
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - name: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.check-tag.outputs.tag }}
+
+      - name: Setup Rust toolchain and cache
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+          components: ""
+          cache-key: release-${{ matrix.target }}
+          lookup-only: true
+
+      - name: Build and package CLI
+        uses: ./.github/actions/package-cli
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Smoke-test packaged CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          SMOKE="$(mktemp -d)"
+          tar -xzf "wgc-${{ matrix.target }}.tar.gz" -C "$SMOKE"
+          BIN="$SMOKE/wgc"
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN="$SMOKE/wgc.exe"; fi
+          "$BIN" --help >/dev/null
+          # A missing world is a layout error (exit 4).
+          status=0
+          "$BIN" scan "$SMOKE/world" --json >/dev/null 2>&1 || status=$?
+          [ "$status" -eq 4 ]
+          # Smallest world wgc recognizes: level.dat (DataVersion 4325),
+          # session.lock and one empty region file.
+          mkdir -p "$SMOKE/world/region"
+          printf '\012\000\000\012\000\004Data\003\000\013DataVersion\000\000\020\345\000\000' | gzip > "$SMOKE/world/level.dat"
+          printf '\342\230\203' > "$SMOKE/world/session.lock"
+          head -c 8192 /dev/zero > "$SMOKE/world/region/r.0.0.mca"
+          # Output is captured before grep: `grep -q` exits on the first match,
+          # and with `pipefail` a write into the closed pipe would fail the step.
+          out="$("$BIN" scan "$SMOKE/world" --json)"
+          grep -q '"schema": "wgc.scan/1"' <<<"$out"
+          # No player position can be checked, so `gc` stops on T-3 (exit 3)
+          # without writing the output.
+          status=0
+          "$BIN" -q gc "$SMOKE/world" -o "$SMOKE/out" >/dev/null 2>&1 || status=$?
+          [ "$status" -eq 3 ]
+          [ ! -e "$SMOKE/out" ]
+          out="$("$BIN" -q gc "$SMOKE/world" -o "$SMOKE/out" --force=T-3 --json)"
+          grep -q '"schema": "wgc.gc/1"' <<<"$out"
+          out="$("$BIN" verify "$SMOKE/out" --source "$SMOKE/world" --json)"
+          grep -q '"result": "ready"' <<<"$out"
+
+      - name: Upload CLI
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: wgc-${{ matrix.target }}
+          path: wgc-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  github-release:
+    name: GitHub Release
+    needs: [check-tag, test, dist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: wgc-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check-tag.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Re-run: attach rebuilt tarballs to the existing release.
+            gh release upload "$TAG" --clobber artifacts/*.tar.gz
+          elif [ "${{ needs.check-tag.outputs.is_prerelease }}" = "true" ]; then
+            gh release create "$TAG" --title "$TAG" --generate-notes --prerelease artifacts/*.tar.gz
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes artifacts/*.tar.gz
+          fi

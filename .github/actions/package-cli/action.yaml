@@ -1,0 +1,26 @@
+name: Build and package CLI
+description: >-
+  Build the `wgc` binary in release mode for one target triple and
+  package it as a tarball (the upload step zips its input and drops
+  file modes, so the tarball keeps the binary executable).
+
+inputs:
+  target:
+    description: Rust target triple to build for
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Build CLI (release)
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: cargo build -p wgc --release --locked --target "$TARGET"
+
+    - name: Package CLI
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        EXE_SUFFIX: ${{ runner.os == 'Windows' && '.exe' || '' }}
+      run: tar -czf "wgc-$TARGET.tar.gz" -C "target/$TARGET/release" "wgc$EXE_SUFFIX"

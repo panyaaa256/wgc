@@ -1,0 +1,75 @@
+name: Clippy
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep in sync with `rust-toolchain.toml`.
+  RUST_TOOLCHAIN: 1.99.1
+
+# Split from `test.yaml` so clippy gets its own runner and timeout budget
+# instead of sharing a job with nextest.
+jobs:
+  clippy:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      # Keep the OS/target pairs in sync with the `test` matrix in `test.yaml`
+      # and the `dist` matrix in `ci.yaml`.
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - name: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # Keyed apart from `test` and `dist`: this workflow runs concurrently
+      # with them, so sharing a key would make the first finisher overwrite
+      # the dependency cache the others expect.
+      - name: Setup Rust toolchain and cache
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+          components: clippy
+          cache-key: clippy-${{ matrix.target }}
+
+      # `--no-deps` builds dependencies with rustc rather than `clippy-driver`;
+      # workspace crates are still linted one by one.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} --no-deps -- -D warnings
