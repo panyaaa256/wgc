@@ -4,9 +4,20 @@ This workspace contains wgc, a chunk GC for Minecraft Java Edition worlds writte
 
 # Reference Documentation
 
-Prior to generating, refactoring, or reviewing code, strictly follow the specifications in:
-- **`docs/spec.md`**: Overall specification, terminology, workspace layout, module boundaries, and dependency policy.
-- **`docs/spec/*.md`**: Detailed specifications per topic (CLI, world layout, region format, chunk NBT, locking, trust checks, scan, output, and versions).
+The specifications define **what** wgc must do, not **how** it is built:
+- **`docs/spec.md`**: Overall principles, terminology, workspace layout, module boundaries, and dependency policy.
+- **`docs/spec/*.md`**: Behavior per topic (CLI, world layout, region format, chunk NBT, locking, trust checks, scan, output, and versions).
+
+Treat the specifications as the source of truth for observable behavior: which chunks are deleted or kept, safety guarantees, CLI options, exit codes, JSON shapes, and acceptance criteria. Internal design (types, APIs, module internals, algorithms, parallelism) is free to choose; do not infer an implementation from the wording of the specifications. When behavior is unspecified, ask instead of guessing.
+
+Keep the specifications declarative: describe behavior, external facts, and the failures that must be distinguished. Do not add type names, function signatures, or implementation steps to them.
+
+# Code Independence from the Specifications
+
+The code must be readable without opening the specifications.
+- Do not reference the specifications from code, comments, rustdoc, or tests (e.g. `see output.md`, `per spec`, `scan.md「…」`).
+- When a rule needs explaining, state the rule itself in the comment or rustdoc.
+- User-facing identifiers such as `T-1`, `L-1`, `S-3`, or `V-5` are part of the output and may appear in code, but the code must define what each one means (for example, in the rustdoc of the type or variant that carries it).
 
 # Code Quality & Refactoring Directives
 
