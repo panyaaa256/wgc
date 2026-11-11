@@ -412,7 +412,9 @@ fn scan_fixture() -> ScanReport {
                     reason: OmitJson::PlayerTempFile,
                 },
             ],
-            dat_old_without_dat: strings(&["world/playerdata/8667ba71-b85a-4004-af54-457a9734eed7.dat_old"]),
+            dat_old_without_dat: strings(&[
+                "world/playerdata/8667ba71-b85a-4004-af54-457a9734eed7.dat_old",
+            ]),
         },
         notices: vec![
             Notice::PregeneratedChunks,
