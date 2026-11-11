@@ -1,30 +1,30 @@
-# JSON の出力
+# JSON output
 
-スクリプトや AI エージェント向けの、機械が読むための約束。
+The machine-readable contract for scripts and AI agents.
 
-- `scan`、`gc`、`verify` は `--json` を受け付ける。`--json` のとき、標準出力には JSON の文書を1つだけ出し、人向けの表示は標準エラーに出す。JSON に色は付けない。
-- `gc --out` は、出力先の `<out>/.wgc/` に記録の JSON を書く。
-- 終了コードは JSON の有無で変わらない（spec/cli.md「終了コード」）。
+- `scan`, `gc` and `verify` accept `--json`. With `--json`, stdout carries exactly one JSON document and the human-readable output goes to stderr. JSON output is never colored.
+- `gc --out` writes record files under `<out>/.wgc/`.
+- Exit codes do not depend on `--json` (see [README](../README.md#exit-codes)).
 
-## 文書の一覧
+## Documents
 
-| `schema` | 出すもの |
+| `schema` | Produced by |
 |---|---|
 | `wgc.scan/1` | `wgc scan --json` |
-| `wgc.gc/1` | `wgc gc --json`（見積もりと出力の両方） |
+| `wgc.gc/1` | `wgc gc --json` (both estimate and output) |
 | `wgc.verify/1` | `wgc verify --json` |
 | `wgc.source-state/1` | `<out>/.wgc/source-state.json` |
 | `wgc.complete/1` | `<out>/.wgc/complete.json` |
 | `wgc.failure/1` | `<out>/.wgc/failure.json` |
 
-## 共通の規則
+## Conventions
 
-- キーと列挙の値は snake_case。
-- パスは入力のパスからの相対パスで、区切りは `/`。入力のパスそのものは `"."`。入力のパスの外にあるパス（ワールドフォルダを指定したときのサーバーの設定など）は、そのまま出す。
-- 例外として `source` と `out` は正規化した絶対パス。
-- UTF-8 でないパスがあれば、JSON を作らずにエラーにする。
-- 一覧は省略しない。同じ入力からは、バイト単位で同じ JSON を出す。一覧の並び順は、ディメンションの ID、リージョン座標、ファイル内のインデックス、パスの順。
-- 確認の ID は `T-1`〜`T-5`、`L-1`、構造エラーの ID は `S-1`〜`S-8`、検証の ID は `V-1`〜`V-6` の形の文字列。
+- Keys and enum values are `snake_case`.
+- Paths are relative to the input path, with `/` as the separator; the input path itself is `"."`. Paths outside the input path (for example server configuration when a world folder was given) are printed as they are.
+- `source` and `out` are the exceptions: canonical absolute paths.
+- If any path is not valid UTF-8, no JSON is produced and the command fails.
+- Lists are never truncated. The same input produces byte-identical JSON. Lists are ordered by dimension ID, then region coordinates, then index within the file, then path.
+- Check IDs are strings of the form `T-1`..`T-5` and `L-1`; structural error IDs `S-1`..`S-8`; verification IDs `V-1`..`V-6` (see [gc-rules.md](gc-rules.md) and [world-format.md](world-format.md)).
 
 ## `wgc.scan/1`
 
@@ -78,59 +78,59 @@
 }
 ```
 
-| キー | 値 |
+| Key | Value |
 |---|---|
-| `layout.kind` | `vanilla_legacy`、`vanilla`、`bukkit_legacy`、`bukkit`（spec/world-layout.md「認識の結果」） |
-| `layout.base` | Bukkit のときの `<base>`。バニラでは `null` |
-| `world_data_version` | `level.dat` の DataVersion。ないときは `null` |
-| `lock` | `acquired`（取れた）、`in_use`（使用中、またはこのプロセスが保持中）、`missing`（`session.lock` がない）、`not_writable`（書き込めない）、`error`（その他の I/O） |
-| `trust[].status` | `pass`、`fail`、`unknown`、`not_applicable` |
-| `trust[].details` | `fail` のときだけ。下の「不合格の対象」の配列 |
-| `trust[].reason` | `unknown` のときだけ。下の「確認できない理由」 |
-| `other_files.omitted[].reason` | `empty_file`（サイズ 0）、`no_entries_left`（残すエントリがない）、`player_temp_file`（プレイヤーデータの一時ファイル） |
-| `other_files.dat_old_without_dat` | 本体の `<uuid>.dat` がない `<uuid>.dat_old` のパス |
-| `notices` | 固定の注意文の ID（spec/cli.md「固定の注意文」） |
-| `dimensions[].chunks.older_data_version` | ワールドより古い形式のチャンクの数 |
-| `dimensions[].inhabited_time` | InhabitedTime の区分ごとのチャンク数（spec/scan.md「InhabitedTime の区分」） |
-| `dimensions[].gc.emptied_files` | 残すエントリがなくなって出力しないファイル |
-| `dimensions[].integrity.structural[]` | 構造エラー。`index` は S-1 では `null` |
-| `dimensions[].integrity.content[]` | 内容エラー。`{ "pos": [x, z], "kind": "decompress" \| "nbt", "detail": "…" }`。`detail` は人向けの説明で、形を約束しない |
-| `dimensions[].integrity.verbatim_triples[]` | そのままコピーするリージョン三つ組の座標 `[x, z]` |
-| `dimensions[].orphans` | 本体のない entities／poi のエントリの数 |
-| `dimensions[].boundary_warnings[]` | 古い地形との境界のまとまり。チャンク数と範囲 |
+| `layout.kind` | `vanilla_legacy`, `vanilla`, `bukkit_legacy`, `bukkit` (see [world-format.md](world-format.md)) |
+| `layout.base` | The Bukkit `<base>`; `null` for vanilla |
+| `world_data_version` | DataVersion of `level.dat`; `null` when absent |
+| `lock` | `acquired`, `in_use` (in use, or already held by this process), `missing` (no `session.lock`), `not_writable`, `error` (other I/O failure) |
+| `trust[].status` | `pass`, `fail`, `unknown`, `not_applicable` |
+| `trust[].details` | Only with `fail`: an array of failed targets (below) |
+| `trust[].reason` | Only with `unknown`: why the check could not be confirmed (below) |
+| `other_files.omitted[].reason` | `empty_file` (size 0), `no_entries_left` (nothing left to keep), `player_temp_file` (a leftover temporary player-data file) |
+| `other_files.dat_old_without_dat` | `<uuid>.dat_old` files whose `<uuid>.dat` is missing |
+| `notices` | IDs of fixed notices: `pregenerated_chunks`, `boundary_general`, `run_official_optimize`, `no_trash` |
+| `dimensions[].chunks.older_data_version` | Chunks stored in a format older than the world |
+| `dimensions[].inhabited_time` | Chunk counts per InhabitedTime bucket (see [gc-rules.md](gc-rules.md)) |
+| `dimensions[].gc.emptied_files` | Files not written because no entry is left to keep |
+| `dimensions[].integrity.structural[]` | Structural errors; `index` is `null` for `S-1` |
+| `dimensions[].integrity.content[]` | Content errors: `{ "pos": [x, z], "kind": "decompress" \| "nbt", "detail": "…" }`. `detail` is a human-readable message with no guaranteed format |
+| `dimensions[].integrity.verbatim_triples[]` | Region coordinates `[x, z]` of triples copied verbatim |
+| `dimensions[].orphans` | entities/poi entries whose region chunk is missing |
+| `dimensions[].boundary_warnings[]` | Clusters where deleted chunks meet older terrain: chunk count and bounding box |
 
-### 不合格の対象（`details[]`）
+### Failed targets (`details[]`)
 
-| `kind` | フィールド | 確認 |
+| `kind` | Fields | Check |
 |---|---|---|
-| `paper_fixed_inhabited_time` | `file`、`value` | T-1 |
+| `paper_fixed_inhabited_time` | `file`, `value` | T-1 |
 | `mob_spawning_disabled` | `world_folder` | T-2 |
-| `player_in_zero_chunk` | `uuid`、`dimension`、`pos` | T-3 |
+| `player_in_zero_chunk` | `uuid`, `dimension`, `pos` | T-3 |
 
-### 確認できない理由（`reason`）
+### Unknown reasons (`reason`)
 
-| `kind` | フィールド |
+| `kind` | Fields |
 |---|---|
 | `unreadable_file` | `path` |
-| `unexpected_value` | `path`、`key` |
+| `unexpected_value` | `path`, `key` |
 | `unknown_version` | `data_version` |
-| `no_players_checked` | なし |
+| `no_players_checked` | none |
 | `forced_chunks_unknown` | `dimensions` |
 
 ## `wgc.gc/1`
 
-`wgc.scan/1` の全項目の後ろに次を加える。
+Every `wgc.scan/1` key, followed by:
 
 ```json
-{ "schema": "wgc.gc/1", "…": "wgc.scan/1 と同じ項目", "mode": "output", "out": "/abs/out", "forced": ["T-1", "T-5", "L-1"], "dimensions_targeted": ["minecraft:overworld"] }
+{ "schema": "wgc.gc/1", "…": "all wgc.scan/1 keys", "mode": "output", "out": "/abs/out", "forced": ["T-1", "T-5", "L-1"], "dimensions_targeted": ["minecraft:overworld"] }
 ```
 
-| キー | 値 |
+| Key | Value |
 |---|---|
-| `mode` | `estimate`（`--out` なし）か `output` |
-| `out` | 出力先の絶対パス。`estimate` では `null` |
-| `forced` | `--force` で無視した確認の ID |
-| `dimensions_targeted` | `--dimension` の値。指定がなければ `null` |
+| `mode` | `estimate` (no `--out`) or `output` |
+| `out` | Absolute path of the output; `null` for `estimate` |
+| `forced` | Check IDs ignored with `--force` |
+| `dimensions_targeted` | Values of `--dimension`; `null` when not given |
 
 ## `wgc.verify/1`
 
@@ -139,18 +139,18 @@
 { "schema": "wgc.verify/1", "result": "changed", "source": null, "changed": ["world/level.dat", "world/region/r.0.0.mca"], "forced": [] }
 ```
 
-| キー | 値 |
+| Key | Value |
 |---|---|
-| `result` | `ready`、`incomplete`、`source_mismatch`、`changed`、`in_use`、`error`（読み込みの失敗） |
-| `source` | 元のワールドの絶対パス。`ready` 以外では `null` |
-| `changed` | `changed` のとき、変わったファイルのパス |
-| `forced` | `complete.json` の `forced` |
+| `result` | `ready`, `incomplete`, `source_mismatch`, `changed`, `in_use`, `error` (reading failed) |
+| `source` | Absolute path of the source world; `null` unless `ready` |
+| `changed` | With `changed`: paths of the files that changed |
+| `forced` | `forced` from `complete.json` |
 
-## `<out>/.wgc/` の記録
+## Records under `<out>/.wgc/`
 
 ### `wgc.source-state/1`
 
-各ワールドフォルダの下の全ファイル（`session.lock` を含む）の、相対パス、サイズ、更新日時（ナノ秒）。
+Relative path, size and modification time (nanoseconds) of every file under each world folder, `session.lock` included.
 
 ```json
 {
@@ -167,7 +167,7 @@
 
 ### `wgc.complete/1`
 
-出力が完了したことを示す（spec/output.md「実行の保証」）。
+Marks the output as complete (see [gc-rules.md](gc-rules.md)).
 
 ```json
 {
@@ -195,14 +195,14 @@
 }
 ```
 
-| キー | 値 |
+| Key | Value |
 |---|---|
-| `stage` | `write`（書き出し）、`verify`（検証）、`record`（記録） |
-| `error` | 人向けの説明。形を約束しない |
-| `items[]` | 検証の失敗。`check` は `V-1`〜`V-6` |
+| `stage` | `write`, `verify`, `record` |
+| `error` | Human-readable message with no guaranteed format |
+| `items[]` | Verification failures; `check` is `V-1`..`V-6` |
 
-## 互換性
+## Compatibility
 
-- 互換性のない変更（キーの削除や改名、値の型の変更）では、`schema` の番号を上げる。
-- キーの追加は互換性のある変更として扱い、番号を上げない。読む側は知らないキーを無視する。
-- golden test が、すべての文書の形をバイト単位で固定している（`crates/core/src/report/tests.rs` の `scan_json_golden`・`gc_json_golden`・`lock_status_json`、`crates/core/src/output/record.rs` の `*_json_golden`、`crates/cli/src/main.rs` の `verify_json_golden`）。上の例はそこからの抜粋。形を変えるときは、テストとこの文書の両方を直す。
+- An incompatible change (removing or renaming a key, changing a value's type) bumps the number in `schema`.
+- Adding a key is a compatible change and does not bump the number. Readers ignore unknown keys.
+- Golden tests pin every document byte for byte: `scan_json_golden`, `gc_json_golden` and `lock_status_json` in `crates/core/src/report/tests.rs`, the `*_json_golden` tests in `crates/core/src/output/record.rs`, and `verify_json_golden` in `crates/cli/src/main.rs`. The examples above are excerpts from them. Changing a shape requires updating both the tests and this document ([ADR-0012](adr/0012-pin-json-output-with-golden-tests.md)).

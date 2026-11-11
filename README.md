@@ -71,7 +71,7 @@ On Bukkit-based servers, do steps 3 and 4 for each world folder and leave `.wgc/
 | `-o`, `--out <dir>` | `gc` | Write the result. Without it, only an estimate is printed |
 | `--dimension <id>` | `gc` | Only delete chunks in this dimension (repeatable). Alias: `--dim`. `overworld`, `the_nether` and `the_end` get the `minecraft:` prefix |
 | `-f`, `--force[=<ids>]` | `gc` | Continue past failed trust checks: all of them, or only the listed IDs (e.g. `--force=T-3,T-5`) |
-| `--source <path>` | `verify` | Compare against this path instead of the recorded original world |
+| `--source <path>` | `verify` | The original world you expect. Fails with a source mismatch if it is not the recorded one |
 | `--json` | `scan`, `gc`, `verify` | Print JSON on stdout. The human-readable summary goes to stderr |
 | `--strict` | `scan`, `gc` | Exit with code 1 when there are warnings |
 | `-q`, `--quiet` | all | Do not print progress or the summary. Warnings and errors are still printed |
@@ -79,6 +79,13 @@ On Bukkit-based servers, do steps 3 and 4 for each world folder and leave `.wgc/
 | `--no-color` | all | Do not use colors. `NO_COLOR` is also respected |
 
 Run `wgc <command> --help` for details.
+
+### Output
+
+- The human-readable summary goes to stdout, or to stderr with `--json`. Warnings and errors always go to stderr.
+- Progress is shown on stderr only when stderr is a terminal and `--quiet` is not given.
+- Colors are used only on a terminal, and never when `NO_COLOR` is set to a non-empty value, `TERM` is `dumb`, or `--no-color` is given.
+- The JSON shapes are documented in [`docs/json.md`](docs/json.md).
 
 ## What gets deleted
 
@@ -130,6 +137,11 @@ output folder is invalid, disk space is insufficient, or verification fails.
 | 5 | Verification failed |
 | 130 | Interrupted (Ctrl-C) |
 
+- **3**: the world is in use or its `session.lock` cannot be opened for writing; the output folder is not empty, is invalid, or overlaps the world; a check stopped the run; or there is not enough disk space.
+- **4**: the world layout cannot be recognized, or reading or writing failed.
+- **5**: verification of the output failed, or `verify` found the output incomplete, recorded for another world, outdated by changes to the world, or the world in use.
+- **130**: wgc waits for the current step to stop and writes no `complete.json`. A second Ctrl-C exits immediately. If `gc --out` had already finished, the run counts as a success.
+
 ## Compatibility
 
 - Minecraft Java Edition worlds in the Anvil format, up to 26.3 (DataVersion 5023)
@@ -137,8 +149,12 @@ output folder is invalid, disk space is insufficient, or verification fails.
 
 ## Documentation
 
-The specification (in Japanese) is in [`docs/spec.md`](docs/spec.md), with
-details per topic under [`docs/spec/`](docs/spec/).
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): how the code is organized and the invariants it keeps
+- [`docs/gc-rules.md`](docs/gc-rules.md): exactly what is deleted, kept, checked and verified
+- [`docs/world-format.md`](docs/world-format.md): the Minecraft storage formats wgc reads, with sources
+- [`docs/json.md`](docs/json.md): the JSON output contract
+- [`docs/adr/`](docs/adr/): architecture decision records
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): building, testing and contributing
 
 ## License
 
