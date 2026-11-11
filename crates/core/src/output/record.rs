@@ -344,6 +344,106 @@ mod tests {
     use super::*;
 
     #[test]
+    fn source_state_json_golden() {
+        let state = SourceState {
+            schema: "wgc.source-state/1".to_owned(),
+            source: "/abs/server".to_owned(),
+            layout: "bukkit_legacy".to_owned(),
+            world_folders: vec!["world".to_owned(), "world_nether".to_owned()],
+            files: vec![
+                SourceStateFile {
+                    path: "world/level.dat".to_owned(),
+                    size: 1_532,
+                    mtime_ns: 1_794_312_896_123_456_789,
+                },
+                SourceStateFile {
+                    path: "world/region/r.0.0.mca".to_owned(),
+                    size: 8_192,
+                    mtime_ns: -1,
+                },
+            ],
+        };
+        assert_eq!(
+            serde_json::to_string(&state).unwrap(),
+            concat!(
+                r#"{"schema":"wgc.source-state/1","source":"/abs/server","layout":"bukkit_legacy","#,
+                r#""world_folders":["world","world_nether"],"files":["#,
+                r#"{"path":"world/level.dat","size":1532,"mtime_ns":1794312896123456789},"#,
+                r#"{"path":"world/region/r.0.0.mca","size":8192,"mtime_ns":-1}]}"#,
+            )
+        );
+    }
+
+    #[test]
+    fn complete_json_golden() {
+        let complete = Complete {
+            schema: "wgc.complete/1".to_owned(),
+            tool_version: "0.1.0".to_owned(),
+            finished_at: "2026-11-10T12:14:56Z".to_owned(),
+            source: "/abs/server".to_owned(),
+            summary: Summary {
+                deleted_chunks: 100,
+                size_before: 1_122_304,
+                size_after: 561_152,
+            },
+            forced: vec!["T-1".to_owned(), "L-1".to_owned()],
+        };
+        assert_eq!(
+            serde_json::to_string(&complete).unwrap(),
+            concat!(
+                r#"{"schema":"wgc.complete/1","tool_version":"0.1.0","#,
+                r#""finished_at":"2026-11-10T12:14:56Z","source":"/abs/server","#,
+                r#""summary":{"deleted_chunks":100,"size_before":1122304,"size_after":561152},"#,
+                r#""forced":["T-1","L-1"]}"#,
+            )
+        );
+    }
+
+    #[test]
+    fn failure_json_golden() {
+        let failure = Failure {
+            schema: "wgc.failure/1".to_owned(),
+            tool_version: "0.1.0".to_owned(),
+            stage: "verify".to_owned(),
+            error: "verification failed".to_owned(),
+            items: vec![
+                FailureItem {
+                    check: "V-6".to_owned(),
+                    path: "world/region/r.0.0.mca".to_owned(),
+                    detail: "chunk 5 differs".to_owned(),
+                },
+                FailureItem {
+                    check: "V-4".to_owned(),
+                    path: "world/region/r.0.1.mca".to_owned(),
+                    detail: "size 8192, expected 4096".to_owned(),
+                },
+            ],
+        };
+        assert_eq!(
+            serde_json::to_string(&failure).unwrap(),
+            concat!(
+                r#"{"schema":"wgc.failure/1","tool_version":"0.1.0","stage":"verify","#,
+                r#""error":"verification failed","items":["#,
+                r#"{"check":"V-6","path":"world/region/r.0.0.mca","detail":"chunk 5 differs"},"#,
+                r#"{"check":"V-4","path":"world/region/r.0.1.mca","detail":"size 8192, expected 4096"}]}"#,
+            )
+        );
+        let empty = Failure {
+            stage: "write".to_owned(),
+            error: "cannot access /abs/out: Permission denied (os error 13)".to_owned(),
+            items: Vec::new(),
+            ..failure
+        };
+        assert_eq!(
+            serde_json::to_string(&empty).unwrap(),
+            concat!(
+                r#"{"schema":"wgc.failure/1","tool_version":"0.1.0","stage":"write","#,
+                r#""error":"cannot access /abs/out: Permission denied (os error 13)","items":[]}"#,
+            )
+        );
+    }
+
+    #[test]
     fn rfc3339_dates() {
         assert_eq!(rfc3339(UNIX_EPOCH), "1970-01-01T00:00:00Z");
         assert_eq!(

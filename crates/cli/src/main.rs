@@ -368,3 +368,48 @@ fn verify(a: &VerifyArgs, cli: &Cli, term: &Terminal) -> u8 {
     }
     code
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json(v: &VerifyJson) -> String {
+        serde_json::to_string(v).unwrap()
+    }
+
+    #[test]
+    fn verify_json_golden() {
+        let ready = VerifyJson {
+            schema: "wgc.verify/1",
+            result: "ready",
+            source: Some("/abs/server".to_owned()),
+            changed: Vec::new(),
+            forced: vec!["T-1".to_owned(), "L-1".to_owned()],
+        };
+        assert_eq!(
+            json(&ready),
+            concat!(
+                r#"{"schema":"wgc.verify/1","result":"ready","source":"/abs/server","#,
+                r#""changed":[],"forced":["T-1","L-1"]}"#,
+            )
+        );
+
+        let changed = VerifyJson {
+            result: "changed",
+            source: None,
+            changed: vec![
+                "world/level.dat".to_owned(),
+                "world/region/r.0.0.mca".to_owned(),
+            ],
+            forced: Vec::new(),
+            ..ready
+        };
+        assert_eq!(
+            json(&changed),
+            concat!(
+                r#"{"schema":"wgc.verify/1","result":"changed","source":null,"#,
+                r#""changed":["world/level.dat","world/region/r.0.0.mca"],"forced":[]}"#,
+            )
+        );
+    }
+}
