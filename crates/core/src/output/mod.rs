@@ -1,4 +1,4 @@
-//! Writing the result to a new folder and verifying it (docs/spec/output.md).
+//! Writing the result to a new folder and verifying it.
 //!
 //! The source world is only read. The one exception is opening
 //! `session.lock` for writing to lock it; its content is never changed.
@@ -55,7 +55,15 @@ pub struct GcOutcome {
 /// One failed verification check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyFailure {
-    /// `V-1` .. `V-6`.
+    /// The check that failed:
+    ///
+    /// - `V-1`: a rewritten region file has structural issues.
+    /// - `V-2`: a rewritten file's entries differ from those the plan keeps.
+    /// - `V-3`: a kept entry's payload or timestamp differs from the source.
+    /// - `V-4`: a copied file's size differs from the source.
+    /// - `V-5`: the output's files differ from those the plan requires
+    ///   (`.wgc/` aside).
+    /// - `V-6`: the source world changed since its state was recorded.
     pub check: &'static str,
     pub path: PathBuf,
     pub detail: String,
@@ -113,7 +121,8 @@ pub(crate) fn io_err(path: &Path) -> impl FnOnce(io::Error) -> OutputError + '_ 
 /// Extra space required on top of the estimate.
 const SPACE_MARGIN: u64 = 64 * 1024 * 1024;
 
-/// Runs `gc --out` (docs/spec/output.md "実行の順序").
+/// Runs `gc --out`. Every stop that `--force` did not allow is found before
+/// the output folder is created and before the plan reads every region file.
 pub fn run_gc(
     layout: &WorldLayout,
     options: &GcOptions,

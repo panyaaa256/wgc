@@ -1,4 +1,9 @@
-//! Checking that InhabitedTime can be trusted (docs/spec/trust.md).
+//! Checking that InhabitedTime can be trusted.
+//!
+//! GC assumes that a chunk whose InhabitedTime is 0 has never had a
+//! non-spectator player within 128 blocks: vanilla adds to it every tick while
+//! a player is that close. Each check looks for a reason the assumption may
+//! not hold, and only in the dimensions that GC targets.
 //!
 //! Files that cannot be read never fail the check run; they make the check
 //! "unknown" instead.
@@ -16,7 +21,8 @@ use crate::types::{ChunkPos, DimensionId, GuardId, Known, UnknownReason};
 use crate::versions::{DV_1_21_5, DV_FILES_26_1, DV_MAX_KNOWN};
 
 /// Results of the trust checks, in ID order T-1..T-5 (T-3 is absent when
-/// [`check_trust_before_plan`] was told to skip it).
+/// [`check_trust_before_plan`] was told to skip it). Each check is described
+/// on its [`GuardId`] variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustReport {
     pub checks: Vec<CheckResult>,
@@ -230,6 +236,11 @@ fn read_modern(path: &Path) -> Result<FixedTime, UnknownReason> {
     }
 }
 
+/// T-1, for Bukkit layouts: fails when `fixed-chunk-inhabited-time` is 0 or
+/// more for a world that holds a targeted dimension, because Paper then pins
+/// every chunk's InhabitedTime to that value. A per-world value overrides the
+/// server default; `default`, a missing key or a missing file inherit it; a
+/// negative value turns the feature off.
 fn paper_config(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
     let Some(server_root) = layout
         .server_root
@@ -297,6 +308,10 @@ fn paper_config(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
 
 // ---- T-2 -----------------------------------------------------------------
 
+/// T-2, for Bukkit layouts from 1.21.5 on: fails when the mob spawning game
+/// rule is off for a world that holds a targeted dimension, because Paper then
+/// stops advancing InhabitedTime (PaperMC/Paper#12827). Other Bukkit servers
+/// are not affected, but the files cannot tell them apart.
 fn mob_spawning(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
     let affected = layout.data_version.is_some_and(|v| v >= DV_1_21_5);
     if !layout.kind.is_bukkit() || !affected {
@@ -396,6 +411,11 @@ fn player_chunk(player: &PlayerSummary) -> Option<ChunkKey> {
     Some((id, block_to_chunk(pos[0], pos[2])?))
 }
 
+/// T-3: fails when a non-spectator player in a targeted dimension stands in a
+/// chunk whose InhabitedTime is 0, which the game would have advanced.
+/// Players whose position cannot be read, whose chunk does not exist, or
+/// whose chunk has no plain InhabitedTime value are skipped; if no player is
+/// left to check, the result is unknown.
 fn player_positions(
     layout: &WorldLayout,
     gc_dims: Option<&BTreeSet<DimensionId>>,
@@ -507,6 +527,8 @@ fn read_gzip<T>(path: &Path, parse: impl FnOnce(&[u8]) -> Result<T, nbt::NbtErro
 
 // ---- T-4, T-5 --------------------------------------------------------------
 
+/// T-4: unknown when the world's DataVersion is newer than any version wgc
+/// knows, since its InhabitedTime behavior has not been checked.
 fn version(layout: &WorldLayout) -> CheckStatus {
     match layout.data_version {
         Some(v) if v > DV_MAX_KNOWN => CheckStatus::Unknown(UnknownReason::UnknownVersion(v)),
@@ -514,6 +536,8 @@ fn version(layout: &WorldLayout) -> CheckStatus {
     }
 }
 
+/// T-5: unknown when the forced chunks of a targeted dimension could not be
+/// read, so chunks around them cannot be protected from deletion.
 fn forced_chunks(
     gc_dims: Option<&BTreeSet<DimensionId>>,
     mut unknown: BTreeSet<DimensionId>,

@@ -1,4 +1,4 @@
-//! Repacking a region file (docs/spec/region-format.md "書き込み").
+//! Repacking a region file.
 
 use super::{HEADER_BYTES, RegionFile, SECTOR_BYTES};
 use crate::types::ChunkIndex;

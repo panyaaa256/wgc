@@ -1,4 +1,4 @@
-//! Building a [`Plan`] (docs/spec/plan.md "処理の流れ").
+//! Building a [`Plan`].
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -255,7 +255,7 @@ fn decide(
     is_targeted: bool,
     forced: &BTreeSet<ChunkPos>,
 ) -> DimensionPlan {
-    // C: candidates.
+    // Deletion candidates: InhabitedTime 0 in a targeted, non-verbatim triple.
     let mut candidates = BTreeSet::new();
     for a in &analyses {
         for (_, pos, summary) in &a.chunks {
@@ -264,7 +264,7 @@ fn decide(
             }
         }
     }
-    // F: forced chunks and their margin.
+    // Forceload protection: forced chunks and their margin.
     let mut forceload = BTreeSet::new();
     for c in forced {
         for dx in -FORCELOAD_MARGIN..=FORCELOAD_MARGIN {
@@ -275,8 +275,10 @@ fn decide(
             }
         }
     }
-    // R: structure starts referenced by chunks that are kept for any reason
-    // other than a structure reference (not in C, or kept by F). One pass.
+    // Structure reference protection: structure starts referenced by chunks
+    // kept for any reason other than a structure reference (not a candidate,
+    // or forceload-protected). One pass: chunks kept only because they are
+    // referenced do not protect what they reference.
     let mut referenced = BTreeSet::new();
     for a in &analyses {
         for (_, pos, summary) in &a.chunks {

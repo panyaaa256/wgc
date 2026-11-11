@@ -1,4 +1,4 @@
-//! Command-line interface for `wgc` (docs/spec/cli.md).
+//! Command-line interface for `wgc`.
 
 mod args;
 mod messages;
@@ -19,13 +19,17 @@ use wgc_core::trust::check_trust;
 use args::{Cli, Command, GcArgs, ScanArgs, VerifyArgs};
 use ui::{SummaryKind, Terminal};
 
-/// Exit codes (docs/spec/cli.md "終了コード").
+/// Process exit codes.
 mod exit {
+    /// Also used when there were warnings, unless `--strict` was given.
     pub const SUCCESS: u8 = 0;
+    /// There were warnings and `--strict` was given.
     pub const WARNINGS: u8 = 1;
     pub const USAGE: u8 = 2;
+    /// Stopped before writing anything.
     pub const STOPPED: u8 = 3;
     pub const ERROR: u8 = 4;
+    /// The output failed verification, or is not ready to swap in.
     pub const VERIFY: u8 = 5;
     pub const INTERRUPTED: u8 = 130;
 }
@@ -248,7 +252,7 @@ fn gc_output(
             };
         }
     };
-    // Folders without session.lock were not locked when L-1 was forced.
+    // When the missing session.lock stop (L-1) was forced, the output folders were not locked.
     let output_lock = if outcome.lock_skipped {
         LockStatus::Missing
     } else {

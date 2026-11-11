@@ -1,4 +1,4 @@
-//! Step 8 (checking the output against the source) and `wgc verify`.
+//! Checking the output against the source after writing, and `wgc verify`.
 
 use std::collections::BTreeSet;
 use std::fs;

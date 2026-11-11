@@ -1,4 +1,4 @@
-//! The `.wgc/` records (docs/spec/output.md "記録").
+//! The `.wgc/` records in the output folder.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -63,6 +63,7 @@ pub struct Failure {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureItem {
+    /// The failed verification check, as in [`VerifyFailure::check`](super::VerifyFailure::check).
     pub check: String,
     pub path: String,
     pub detail: String,

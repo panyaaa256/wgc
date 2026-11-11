@@ -1,4 +1,4 @@
-//! Reports and their JSON form (docs/spec/scan.md).
+//! Reports and their JSON form.
 //!
 //! The report types are separate from the plan so that the JSON schema can
 //! stay stable while the plan changes. Paths are relative to the input path
@@ -52,13 +52,19 @@ impl LockStatus {
     }
 }
 
-/// Fixed notices shown with a report (docs/spec/cli.md "固定の注意文").
+/// Fixed notices shown with a report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Notice {
+    /// Always: pre-generated chunks are deleted too.
     PregeneratedChunks,
+    /// When chunks are deleted: they are regenerated with the current version
+    /// and settings, and may not line up with older terrain.
     BoundaryGeneral,
+    /// When some chunks are older than the world: suggest the game's Optimize World.
     RunOfficialOptimize,
+    /// After `gc --out` completes: the original world is untouched and is the
+    /// only way back.
     NoTrash,
 }
 
@@ -207,7 +213,9 @@ pub struct ChunkCounts {
     pub older_data_version: u64,
 }
 
-/// InhabitedTime buckets in ticks (docs/spec/scan.md "InhabitedTime の区分").
+/// Chunk counts by InhabitedTime, in ticks (20 per second). `missing` counts a
+/// missing tag or one of another type; `unreadable` counts chunks whose data
+/// could not be decoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct InhabitedBuckets {
     pub zero: u64,

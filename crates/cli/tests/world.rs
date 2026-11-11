@@ -135,7 +135,7 @@ fn scan_and_strict() {
     // The table shows vanilla dimensions without the namespace.
     assert!(stdout(&o).contains("  overworld "), "{}", stdout(&o));
     assert!(!stdout(&o).contains("minecraft:"));
-    // T-3 is unknown (no players): a warning, so --strict exits with 1.
+    // T-3 (player positions) is unknown without players: a warning, so --strict exits with 1.
     assert_eq!(
         wgc(&["scan", s(w.path()), "--strict"]).status.code(),
         Some(1)
@@ -214,7 +214,7 @@ fn layout_errors_exit_with_4() {
     assert_eq!(o.status.code(), Some(4));
     assert!(stderr(&o).contains("No Minecraft world"));
 
-    // W-1: a vanilla server root.
+    // A vanilla server root: the world folder inside it is suggested instead.
     let root = tempfile::tempdir().unwrap();
     write(
         &root.path().join("server.properties"),
@@ -283,7 +283,7 @@ fn no_color_disables_escapes() {
 #[test]
 fn partial_force_keeps_the_other_stops() {
     let w = world();
-    // Unreadable forced chunks: T-5 is unknown, in addition to T-3.
+    // Unreadable forced chunks: T-5 (forced chunks readable) is unknown, in addition to T-3.
     write(&w.path().join("data/chunks.dat"), b"broken");
     let o = tempfile::tempdir().unwrap();
     let out = o.path().join("out");
