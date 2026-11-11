@@ -4,18 +4,21 @@ This workspace contains wgc, a chunk GC for Minecraft Java Edition worlds writte
 
 # Reference Documentation
 
-The specifications define **what** wgc must do, not **how** it is built:
-- **`docs/spec.md`**: Overall principles, terminology, workspace layout, module boundaries, and dependency policy.
-- **`docs/spec/*.md`**: Behavior per topic (CLI, world layout, region format, chunk NBT, locking, trust checks, scan, output, and versions).
+Read before generating, refactoring, or reviewing code:
+- **`ARCHITECTURE.md`**: Code map, module boundaries, invariants, and cross-cutting concerns.
+- **`docs/gc-rules.md`**: What is deleted, kept, checked, and verified. The source of truth for deletion and safety behavior.
+- **`docs/world-format.md`**: External facts about Minecraft, Bukkit, and Paper storage formats, with sources.
+- **`docs/json.md`**: The JSON output contract, pinned by golden tests.
+- **`README.md`**: CLI options, output conventions, and exit codes.
+- **`CONTRIBUTING.md`**: Workspace, checks, testing, documentation, and commit conventions.
+- **`docs/adr/`**: Why major decisions were made. ADRs are historical records of rationale, not instructions; when an ADR and a reference document disagree, the reference document describes current behavior.
 
-Treat the specifications as the source of truth for observable behavior: which chunks are deleted or kept, safety guarantees, CLI options, exit codes, JSON shapes, and acceptance criteria. Internal design (types, APIs, module internals, algorithms, parallelism) is free to choose; do not infer an implementation from the wording of the specifications. When behavior is unspecified, ask instead of guessing.
+The documents define **what** wgc does, not **how** it is built. Internal design (types, APIs, module internals, algorithms, parallelism) is free to choose; do not infer an implementation from their wording. When behavior is unspecified, ask instead of guessing. Keep the documents behavioral: do not add type names, function signatures, or implementation steps to them. Two exceptions: `ARCHITECTURE.md` names modules and key types because it is a code map, and ADRs may name implementation choices because that is what they record.
 
-Keep the specifications declarative: describe behavior, external facts, and the failures that must be distinguished. Do not add type names, function signatures, or implementation steps to them.
+# Code Independence from the Documentation
 
-# Code Independence from the Specifications
-
-The code must be readable without opening the specifications.
-- Do not reference the specifications from code, comments, rustdoc, or tests (e.g. `see output.md`, `per spec`, `scan.md「…」`).
+The code must be readable without opening the documents.
+- Do not reference the documents from code, comments, rustdoc, or tests (e.g. `see gc-rules.md`, `per spec`).
 - When a rule needs explaining, state the rule itself in the comment or rustdoc.
 - User-facing identifiers such as `T-1`, `L-1`, `S-3`, or `V-5` are part of the output and may appear in code, but the code must define what each one means (for example, in the rustdoc of the type or variant that carries it).
 
@@ -29,15 +32,15 @@ The code must be readable without opening the specifications.
 
 # Code Generation Directives
 
-- Respect crate boundaries inside `crates/*` and adhere strictly to the unidirectional dependency flow defined in `docs/spec.md` (`cli` -> `core`).
+- Respect crate boundaries inside `crates/*` and adhere strictly to the unidirectional dependency flow defined in `ARCHITECTURE.md` (`cli` -> `core`).
 - Never use `unwrap()`, `expect()`, or `panic!` in non-test library code.
-- Write code comments, rustdoc, and commit messages in English. The specifications under `docs/` are written in Japanese.
+- Write code comments, rustdoc, commit messages, and all documentation in English. `README_ja.md` is the only exception: a Japanese translation of `README.md`, kept in sync with it.
 
 # Commit Directives
 
 - Write commit messages in the [Conventional Commits](https://www.conventionalcommits.org/) format: `<type>[optional scope]: <description>`.
   - **Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
-  - **Scope**: the affected area, such as a crate or module (`core`, `cli`, `region`, `output`, `spec`).
+  - **Scope**: the affected area, such as a crate or module (`core`, `cli`, `region`, `output`, `docs`).
   - **Description**: imperative mood, present tense, under 72 characters.
   - Mark a breaking change with `!` after the type or scope, or with a `BREAKING CHANGE:` footer.
 - Keep one logical change per commit.
