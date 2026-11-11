@@ -1,4 +1,4 @@
-//! Step 7: writing the output (docs/spec/output.md "書き出し").
+//! Writing every file of the world folders to the output as the plan says.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};

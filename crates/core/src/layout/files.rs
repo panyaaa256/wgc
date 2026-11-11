@@ -1,4 +1,4 @@
-//! Enumerating region triples (docs/spec/world-layout.md "リージョン三つ組の列挙").
+//! Enumerating region triples.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

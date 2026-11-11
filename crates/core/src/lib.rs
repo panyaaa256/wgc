@@ -1,9 +1,7 @@
 //! Analysis and processing for `wgc`.
 //!
 //! This crate never writes to the terminal. Long-running operations report
-//! progress and warnings through an observer instead (see
-//! `docs/spec/types.md`). Modules are added phase by phase as described in
-//! `docs/spec.md`.
+//! progress and warnings through a [`types::Observer`] instead.
 
 pub mod layout;
 pub mod lock;

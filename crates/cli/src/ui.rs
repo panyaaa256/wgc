@@ -1,5 +1,4 @@
-//! Terminal output: colors, progress, warnings and the human-readable summary
-//! (docs/spec/scan.md "ターミナル出力", docs/spec/cli.md "出力").
+//! Terminal output: colors, progress, warnings and the human-readable summary.
 
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -13,7 +12,8 @@ use wgc_core::types::{GuardId, Observer, Progress, Warning, short_dimension_id};
 
 use crate::messages;
 
-/// Whether to use ANSI colors on a stream (docs/spec/cli.md "出力").
+/// Whether to use ANSI colors on a stream: only on a terminal, and not when `NO_COLOR` is
+/// set to a non-empty value, `TERM` is `dumb`, or `--no-color` is given.
 pub fn color_enabled(no_color_flag: bool, is_terminal: bool) -> bool {
     color_allowed(
         no_color_flag,
@@ -432,7 +432,7 @@ pub fn summary(
 ) -> std::io::Result<()> {
     let style = format.style;
     let mut details_hidden = false;
-    // 1. Layout, version, lock.
+    // Layout, data version, lock.
     writeln!(
         out,
         "{} {} ({}), data version {}",
@@ -451,7 +451,7 @@ pub fn summary(
     };
     writeln!(out, "{} {lock}", style.bold("Lock:"))?;
 
-    // 2. Trust checks.
+    // Trust checks.
     writeln!(out, "{}", style.bold("Checks:"))?;
     let mut stopping = Vec::new();
     for item in &r.trust {
@@ -495,7 +495,7 @@ pub fn summary(
         )?;
     }
 
-    // 3-4. Per dimension and totals (docs/spec/scan.md "ディメンションの表").
+    // Dimension table with its total row.
     let rows: Vec<_> = r.dimensions.iter().map(DimensionRow::of).collect();
     let total = DimensionRow::total(&rows);
     let temp_files = r.other_files.omitted.len() as u64;
@@ -523,7 +523,7 @@ pub fn summary(
         lists(out, r, style)?;
     }
 
-    // 7. Older chunks (scan only).
+    // Older chunks (scan only).
     let older: u64 = r
         .dimensions
         .iter()
@@ -533,7 +533,7 @@ pub fn summary(
         writeln!(out, "{}", messages::older_chunks(older))?;
     }
 
-    // 9. Notices.
+    // Notices. `RunOfficialOptimize` is only printed with the older chunk count above.
     for n in &r.notices {
         if *n != wgc_core::report::Notice::RunOfficialOptimize {
             writeln!(out, "{} {}", style.bold("Note:"), messages::notice(*n))?;
@@ -542,9 +542,9 @@ pub fn summary(
     Ok(())
 }
 
-/// Sections 5, 6 and 8: the lists only `--verbose` prints.
+/// The lists only `--verbose` prints: integrity problems, files not copied, and seams with old terrain.
 fn lists(out: &mut dyn Write, r: &ScanReport, style: Style) -> std::io::Result<()> {
-    // 5. Integrity.
+    // Integrity problems.
     let structural: Vec<_> = r
         .dimensions
         .iter()
@@ -570,7 +570,7 @@ fn lists(out: &mut dyn Write, r: &ScanReport, style: Style) -> std::io::Result<(
         })?;
     }
 
-    // 6. Clean targets.
+    // Files and entries not copied.
     let empty: Vec<&String> = r.dimensions.iter().flat_map(|d| &d.empty_files).collect();
     let orphans: u64 = r
         .dimensions
@@ -588,7 +588,7 @@ fn lists(out: &mut dyn Write, r: &ScanReport, style: Style) -> std::io::Result<(
         }
     }
 
-    // 8. Boundary with old terrain.
+    // Seams with old terrain.
     let clusters: Vec<_> = r
         .dimensions
         .iter()
@@ -611,7 +611,7 @@ fn lists(out: &mut dyn Write, r: &ScanReport, style: Style) -> std::io::Result<(
     Ok(())
 }
 
-/// The swap steps of docs/spec/output.md "書き戻しの手順", with real paths.
+/// Prints the steps for swapping the output in for the original world, with real paths.
 pub fn swap_steps(
     out: &mut dyn Write,
     layout_kind: &str,

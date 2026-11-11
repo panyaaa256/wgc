@@ -1,4 +1,4 @@
-//! Basic types shared by every module (docs/spec/types.md).
+//! Basic types shared by every module.
 
 use std::fmt;
 use std::str::FromStr;
@@ -169,7 +169,8 @@ impl FromStr for DimensionId {
     }
 }
 
-/// The three files of a region triple.
+/// The three files of a region triple: the `r.<x>.<z>.mca` files with the same
+/// coordinates in a dimension's `region/`, `entities/` and `poi/` folders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FileKind {
     Region,
@@ -190,14 +191,29 @@ impl FileKind {
     }
 }
 
-/// A stop that `--force` can continue past: the trust checks and `session.lock` missing.
+/// A stop that `--force` can continue past, shown to users as `T-1`..`T-5`
+/// and `L-1`.
+///
+/// `T-1`..`T-5` are trust checks: each confirms that `InhabitedTime` can be
+/// relied on to tell which chunks players have been near. A check that fails
+/// or cannot be confirmed stops writing output unless it is forced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GuardId {
+    /// T-1: on a Bukkit-based server, Paper's `fixed-chunk-inhabited-time`
+    /// setting does not pin every chunk's `InhabitedTime` to a fixed value.
     T1,
+    /// T-2: on a Bukkit-based server at 1.21.5 or later, mob spawning is
+    /// enabled. Paper does not increase `InhabitedTime` while it is disabled
+    /// (PaperMC/Paper#12827).
     T2,
+    /// T-3: no player stands in a chunk whose `InhabitedTime` is 0.
     T3,
+    /// T-4: the world's `DataVersion` is not newer than the tool knows.
     T4,
+    /// T-5: the forced (`/forceload`) chunks of the dimensions being collected
+    /// could be read, so they can be protected from deletion.
     T5,
+    /// L-1: the world folder has a `session.lock` file to lock.
     L1,
 }
 
@@ -267,7 +283,7 @@ impl<T> From<Result<T, UnknownReason>> for Known<T> {
     }
 }
 
-/// Why something could not be confirmed (docs/spec/trust.md).
+/// Why something, such as a trust check, could not be confirmed.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnknownReason {
     UnreadableFile {

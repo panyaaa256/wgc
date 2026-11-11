@@ -1,4 +1,4 @@
-//! Recognizing the world layout (docs/spec/world-layout.md).
+//! Recognizing the world layout.
 //!
 //! Layout detection follows TMCJapan/sekai (`crates/world/src/tree/hostworld/`)
 //! so that both tools classify a folder the same way.
@@ -60,7 +60,7 @@ pub struct Dimension {
     pub world_folder: PathBuf,
 }
 
-/// The result of layout detection. Later phases use only this.
+/// The result of layout detection. Every later step finds the world's files through this.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorldLayout {
     /// The input path, canonicalized.
@@ -87,10 +87,12 @@ pub struct WorldLayout {
 pub enum LayoutError {
     #[error("no world found at {path}")]
     NotAWorld { path: PathBuf },
-    /// W-1: a vanilla server root was given; `suggested` is its world folder.
+    /// W-1: the path looks like the root of a vanilla server rather than a
+    /// world folder; `suggested` is the world folder inside it.
     #[error("looks like a vanilla server root; world folder is {suggested}")]
     LooksLikeVanillaServer { suggested: PathBuf },
-    /// W-2: a world folder of a Bukkit-based server was given.
+    /// W-2: the path looks like one world folder of a Bukkit-based server
+    /// rather than the server root.
     #[error("looks like a world folder of a bukkit-based server")]
     LooksLikeBukkitWorldFolder,
     #[error("{first} and {second} name the same region")]

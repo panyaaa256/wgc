@@ -1,4 +1,4 @@
-//! Command-line arguments (docs/spec/cli.md "コマンド").
+//! Command-line arguments.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;

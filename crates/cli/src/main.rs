@@ -1,4 +1,4 @@
-//! Command-line interface for `wgc` (docs/spec/cli.md).
+//! Command-line interface for `wgc`.
 
 mod args;
 mod messages;
@@ -19,13 +19,17 @@ use wgc_core::trust::check_trust;
 use args::{Cli, Command, GcArgs, ScanArgs, VerifyArgs};
 use ui::{SummaryKind, Terminal};
 
-/// Exit codes (docs/spec/cli.md "終了コード").
+/// Process exit codes.
 mod exit {
+    /// Also used when there were warnings, unless `--strict` was given.
     pub const SUCCESS: u8 = 0;
+    /// There were warnings and `--strict` was given.
     pub const WARNINGS: u8 = 1;
     pub const USAGE: u8 = 2;
+    /// Stopped before writing anything.
     pub const STOPPED: u8 = 3;
     pub const ERROR: u8 = 4;
+    /// The output failed verification, or is not ready to swap in.
     pub const VERIFY: u8 = 5;
     pub const INTERRUPTED: u8 = 130;
 }
@@ -248,7 +252,7 @@ fn gc_output(
             };
         }
     };
-    // Folders without session.lock were not locked when L-1 was forced.
+    // When the missing session.lock stop (L-1) was forced, the output folders were not locked.
     let output_lock = if outcome.lock_skipped {
         LockStatus::Missing
     } else {
@@ -363,4 +367,49 @@ fn verify(a: &VerifyArgs, cli: &Cli, term: &Terminal) -> u8 {
         }
     }
     code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json(v: &VerifyJson) -> String {
+        serde_json::to_string(v).unwrap()
+    }
+
+    #[test]
+    fn verify_json_golden() {
+        let ready = VerifyJson {
+            schema: "wgc.verify/1",
+            result: "ready",
+            source: Some("/abs/server".to_owned()),
+            changed: Vec::new(),
+            forced: vec!["T-1".to_owned(), "L-1".to_owned()],
+        };
+        assert_eq!(
+            json(&ready),
+            concat!(
+                r#"{"schema":"wgc.verify/1","result":"ready","source":"/abs/server","#,
+                r#""changed":[],"forced":["T-1","L-1"]}"#,
+            )
+        );
+
+        let changed = VerifyJson {
+            result: "changed",
+            source: None,
+            changed: vec![
+                "world/level.dat".to_owned(),
+                "world/region/r.0.0.mca".to_owned(),
+            ],
+            forced: Vec::new(),
+            ..ready
+        };
+        assert_eq!(
+            json(&changed),
+            concat!(
+                r#"{"schema":"wgc.verify/1","result":"changed","source":null,"#,
+                r#""changed":["world/level.dat","world/region/r.0.0.mca"],"forced":[]}"#,
+            )
+        );
+    }
 }

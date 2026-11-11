@@ -1,5 +1,5 @@
 //! Files the layout points at: `level.dat`, game rules, forced chunks,
-//! player data and Paper configuration (docs/spec/world-layout.md).
+//! player data and Paper configuration.
 
 use std::collections::BTreeSet;
 use std::fs;

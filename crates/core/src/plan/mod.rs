@@ -1,4 +1,4 @@
-//! The plan: what to delete and how to write each file (docs/spec/plan.md).
+//! The plan: what to delete and how to write each file.
 //!
 //! The only source of truth for keeping a chunk is [`ChunkDecision::decision`];
 //! file actions and entry fates are derived from it by [`TriplePlan`]'s methods.
@@ -35,7 +35,7 @@ pub enum Inhabited {
     Unreadable(ContentError),
 }
 
-/// Why a chunk is kept, by priority.
+/// Why a chunk is kept. When several reasons apply, the first variant listed is recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KeepReason {
     TripleVerbatim,

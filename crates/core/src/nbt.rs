@@ -1,8 +1,8 @@
-//! Reading the few NBT fields the tool needs (docs/spec/chunk-nbt.md).
+//! Reading the few NBT fields the tool needs.
 //!
-//! nanonbt is used only inside this module. Only the fields listed in the
-//! spec are read; everything else is skipped with `nanonbt::skip_nbt`. A tag
-//! with an unexpected type is treated like a missing tag.
+//! nanonbt is used only inside this module. Only the fields the tool needs
+//! are read; everything else is skipped with `nanonbt::skip_nbt`. A tag with
+//! an unexpected type is treated like a missing tag.
 
 use std::collections::BTreeSet;
 
@@ -13,7 +13,7 @@ use std::io::Read as _;
 use crate::types::{ChunkPos, DataVersion};
 use crate::versions::{DV_CHUNK_ROOT, DV_GAMERULE_REGISTRY};
 
-/// Why bytes cannot be read as NBT (content error C-2).
+/// Why bytes cannot be read as NBT (content error `C-2` for chunk data).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NbtError {
     #[error("nbt data ends early")]

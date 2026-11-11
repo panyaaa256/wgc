@@ -1,4 +1,4 @@
-//! Chunk decompression (docs/spec/region-format.md "圧縮方式").
+//! Chunk decompression.
 
 use std::io::Read;
 
@@ -16,7 +16,7 @@ const LZ4: u8 = 4;
 /// so that a hostile or broken `.mcc` cannot exhaust memory.
 pub const MAX_DECOMPRESSED_BYTES: usize = 256 * 1024 * 1024;
 
-/// Why a chunk's data cannot be decompressed (content error C-1).
+/// Why a chunk's data cannot be decompressed (content error `C-1`).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DecompressError {
     /// Custom compression (127) or an unknown compression type.

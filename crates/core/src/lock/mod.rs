@@ -1,4 +1,4 @@
-//! Locking `session.lock` (docs/spec/lock.md).
+//! Locking `session.lock`.
 //!
 //! The lock must exclude Java's `FileChannel.tryLock`, which uses POSIX
 //! record locks on Unix and `LockFileEx` on Windows. `flock` (and therefore
@@ -22,7 +22,7 @@ pub enum LockError {
     /// Another process (the game or a server) holds the lock.
     #[error("{path} is locked by another process")]
     InUse { path: PathBuf },
-    /// `session.lock` does not exist (stop L-1).
+    /// `session.lock` does not exist (the `L-1` stop).
     #[error("{path} does not exist")]
     Missing { path: PathBuf },
     /// `session.lock` cannot be opened for writing, which locking needs.

@@ -1,4 +1,4 @@
-//! Anvil region files (docs/spec/region-format.md).
+//! Anvil region files.
 //!
 //! Parsing never fails: problems with the file structure are collected as
 //! [`StructuralIssue`]s, and problems with a single chunk's data surface as
@@ -58,7 +58,9 @@ fn parse_coord(s: &str) -> Option<i32> {
     s.parse().ok()
 }
 
-/// Structural problem IDs S-1..S-8.
+/// A structural problem in a region file, shown to users as `S-1`..`S-8`.
+///
+/// Every structural problem found in a file is collected, not only the first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StructuralId {
     /// File size is between 1 and 8191 bytes.
@@ -67,15 +69,16 @@ pub enum StructuralId {
     S2,
     /// The sector offset is below 2.
     S3,
-    /// The payload extends past the end of the file.
+    /// The payload extends past the end of the file, including when the length
+    /// field itself cannot be read.
     S4,
     /// The length field is zero.
     S5,
-    /// The payload is longer than its sectors.
+    /// The payload is longer than the sectors the location table gives it.
     S6,
-    /// Two chunks share sectors.
+    /// The sector ranges of two chunks overlap.
     S7,
-    /// The external `.mcc` file is missing.
+    /// The compression type is 128 or above but the external `.mcc` file is missing.
     S8,
 }
 
@@ -115,13 +118,13 @@ pub struct StructuralIssue {
     pub index: Option<ChunkIndex>,
 }
 
-/// A problem with a single chunk's data.
+/// A problem with a single chunk's data, shown to users as `C-1` or `C-2`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ContentError {
-    /// C-1.
+    /// C-1: the chunk's data cannot be decompressed.
     #[error("cannot decompress chunk: {0}")]
     Decompress(#[from] DecompressError),
-    /// C-2.
+    /// C-2: the decompressed data cannot be read as NBT.
     #[error("cannot read chunk nbt: {0}")]
     Nbt(#[from] crate::nbt::NbtError),
 }
