@@ -1,10 +1,8 @@
-# リージョンファイル（P1）
-
-実装先: `core::region`。NBT は扱わない。
+# リージョンファイル
 
 ## ファイル名
 
-- `r.<rx>.<rz>.mca`。座標は `-?[0-9]+`（先頭の 0 は可、`+` は不可）。`r.00.00.mca` も受け入れる。チャンク座標が `i32` に収まらないリージョン座標は、リージョンファイルとして扱わない。
+- `r.<rx>.<rz>.mca`。座標は `-?[0-9]+`（先頭の 0 は可、`+` は不可）。`r.00.00.mca` も受け入れる。チャンク座標が 32 ビット符号付き整数に収まらないリージョン座標は、リージョンファイルとして扱わない。
 - 形式に合わないファイルは、リージョンファイルとして扱わない。
 - 外部ファイル: 同じフォルダの `c.<cx>.<cz>.mcc`（絶対チャンク座標）。
 
@@ -65,16 +63,7 @@ P4 は、構造エラーのあるファイルを含むリージョン三つ組�
 - 末尾のセクタは 4096 バイトに満たないことがあるので、範囲は実際の長さ（S-4）で判定する。
 - サイズ 0 のファイルは構造エラーではなく、チャンクのないファイルとして扱う。
 - Paper の 1.16 以前の「Allow Saving of Oversized Chunks」は、リージョンファイルの形式を変えず、余ったデータを同じフォルダの別ファイル（`*.oversized.nbt` など）に書いていた。これらは他のファイルと同じくそのままコピーし、特別には扱わない。
-
-```rust
-pub enum StructuralId { S1, S2, S3, S4, S5, S6, S7, S8 }   // 表示と JSON は "S-1" など
-
-pub struct StructuralIssue {
-    pub kind: FileKind,
-    pub id: StructuralId,
-    pub index: Option<ChunkIndex>,   // ファイル全体の問題（S-1）なら None
-}
-```
+- 構造エラーは、どの種別のファイルか、ID、チャンクのインデックスで示す。ファイル全体の問題（S-1）にはインデックスがない。ID は表示でも JSON でも `S-1` の形で示す。
 
 ### 内容エラー（チャンク単位）
 
@@ -83,46 +72,30 @@ pub struct StructuralIssue {
 | ID | 条件 |
 |---|---|
 | C-1 | 展開できない |
-| C-2 | NBT として読めない（P2 で検出） |
+| C-2 | NBT として読めない（P2 で検出。区別する失敗は chunk-nbt.md） |
 
-```rust
-pub enum ContentError {
-    Decompress(DecompressError),     // C-1
-    Nbt(NbtError),                   // C-2（chunk-nbt.md）
-}
+C-1 では、次の失敗を区別する。
 
-pub enum DecompressError {
-    UnsupportedCompression(u8),      // 127 と不明な方式
-    MissingExternal,                 // 外部ファイルの方式なのに、中身を渡されなかった
-    Truncated,                       // ペイロードが 5 バイト未満
-    Corrupt,                         // データの破損
-    TooLarge,                        // 展開後が 256 MiB を超える
-    Lz4Checksum,
-}
-```
-
-## 読み取りの API（例）
-
-- `RegionFile::parse(kind: FileKind, pos: RegionPos, bytes: Vec<u8>, external: &BTreeSet<ChunkPos>) -> RegionFile`（バイト列を所有し、構造エラーの一覧を持つ）
-- `issues() -> &[StructuralIssue]`
-- `entries()`: 各チャンクの `ChunkIndex`、`ChunkPos`、開始セクタ、セクタ数、タイムスタンプ、`L`、圧縮方式
-- `payload(index: ChunkIndex) -> Option<&[u8]>`
-- `decompress(payload: &[u8], external: Option<&[u8]>) -> Result<Vec<u8>, DecompressError>`
-- `Decompressor::decompress(&mut self, payload: &[u8], external: Option<&[u8]>) -> Result<&[u8], DecompressError>`（`decompress` と同じ結果。zlib の展開の状態と出力のバッファを使い回す。多くのチャンクを続けて展開するときはこちらを使う。結果は次の呼び出しまで有効）
-- `write_region(source: &RegionFile, keep: &[ChunkIndex]) -> Result<Vec<u8>, WriteError>`（下の「書き込み」。`WriteError` は `MissingEntry`、`TooManySectors`）
-
-ファイル全体をメモリに読み込んでよい。
+| 失敗 | 意味 |
+|---|---|
+| 対応しない方式 | 圧縮方式が 127（カスタム）か、不明な値 |
+| 外部ファイルがない | 外部ファイルの方式なのに、外部ファイルの中身がない（S-8 のチャンクを展開しようとした場合） |
+| 短すぎる | ペイロードが 5 バイト未満 |
+| 壊れている | 圧縮されたデータが壊れていて展開できない |
+| 大きすぎる | 展開後のデータが 256 MiB を超える |
+| LZ4 のチェックサムの不一致 | LZ4 のブロックのチェックサムが展開後のデータと合わない |
 
 ## 書き込み
 
-残すインデックスの集合から、新しいファイルのバイト列を作る。
+残すチャンクの集合から、新しいリージョンファイルを作る。書き込んだファイルは次の形になる。
 
-1. 残すチャンクをインデックスの昇順に、セクタ 2 から詰めて置く。
-2. ペイロードを元のバイト列のまま書き、4096 バイトの境界まで 0 で埋める。
-3. 位置テーブルに新しい開始セクタと `ceil((4 + L) / 4096)` を書く。
-4. タイムスタンプは、残すチャンクは元の値、それ以外は 0。
+- 残すチャンクを、インデックスの昇順に、セクタ 2 から隙間なく並べる。
+- 各ペイロードは元のバイト列のまま書き、4096 バイトの境界まで 0 で埋める。
+- 位置テーブルには、新しい開始セクタと `ceil((4 + L) / 4096)` を書く。
+- タイムスタンプは、残すチャンクは元の値、それ以外は 0。
+- `.mcc` はリージョンファイルの書き込みに含まない（どれを出力するかは plan.md、コピーは output.md）。
 
-`.mcc` のコピーは P7 が行う。
+残すと指定したチャンクが元のファイルにない場合と、1つのチャンクが 255 セクタを超える場合は、書き込みを失敗とする。構造エラーのないファイルでは、どちらも起こらない。
 
 ## 受け入れ条件
 

@@ -1,6 +1,6 @@
-# CLI（P8）
+# CLI
 
-実装先: `wgc`（`crates/cli`）。引数の解析は clap。メッセージは英語のみで、`messages` モジュールの1か所にまとめる。
+メッセージは英語のみ。
 
 ## コマンド
 
@@ -17,12 +17,12 @@ wgc --help
 
 | オプション | 意味 |
 |---|---|
-| `--json` | JSON（scan.md「JSON」）を標準出力に出す。人向けの表示は標準エラーに出す |
+| `--json` | JSON（docs/json.md）を標準出力に出す。人向けの表示は標準エラーに出す |
 | `--strict` | 警告があれば終了コード 1 にする |
 | `-o`, `--out <dir>` | 出力を書く。なければ見積もりだけ出し、何も書かない |
 | `--dimension <id>` | GC の削除をそのディメンションだけで行う（複数可）。`--dim` を別名にする。`overworld`、`the_nether`、`the_end` は `minecraft:` を補う。存在しない ID は引数の誤り |
 | `-f`, `--force[=<ids>]` | 判定の信用に関する停止を無視する。`--force` だけならすべて、`--force=T-3,T-5` なら指定した ID だけ。不明な ID は引数の誤り |
-| `--source <path>` | `verify` で、記録された元のワールドの代わりに比べるパス |
+| `--source <path>` | `verify` で、元のワールドとして想定するパス。記録された元のワールドと違えば「元のワールドの不一致」になる（output.md「`wgc verify`」） |
 | `-q`, `--quiet` | 進捗と人向けの要約を出さない（警告とエラーは出す） |
 | `-v`, `--verbose` | 人向けの要約に一覧（不合格になった対象、整合性の問題、clean の対象、古い地形との境界）を出す（scan.md「ターミナル出力」）。`--quiet` と同時には指定できない（引数の誤り） |
 | `--no-color` | 色を使わない |
@@ -57,17 +57,19 @@ wgc --help
 | 5 | 検証の失敗 |
 | 130 | 中断された（Ctrl-C） |
 
-| エラー | コード |
+失敗の区別（各文書の「区別する失敗」）と終了コードの対応:
+
+| 失敗 | コード |
 |---|---|
-| `LayoutError`（すべて） | 4 |
-| `LockError::InUse`、`NotWritable` | 3 |
-| `LockError::Io` | 4 |
-| `OutputError::OutputNotEmpty`、`InvalidOutputPath`、`OutputOverlapsSource`、`Stopped`、`InsufficientSpace` | 3 |
-| `OutputError::Verification` | 5 |
-| `OutputError::Io`、`Plan(PlanError::Io)` | 4 |
-| `OutputError::Cancelled`、`PlanError::Cancelled` | 130 |
-| `VerifyError::Incomplete`、`SourceMismatch`、`Changed`、`InUse` | 5 |
-| `VerifyError::Io` | 4 |
+| ワールドの構成の認識の失敗（world-layout.md、すべて） | 4 |
+| ロック: 使用中、書き込めない、このプロセスが保持中（lock.md） | 3 |
+| ロック: その他の I/O | 4 |
+| `gc --out`: 出力先が空でない、出力先のパスが不正、出力先が元のワールドと重なる、停止（確認の ID つき）、空き容量の不足（output.md） | 3 |
+| `gc --out`: 検証の失敗 | 5 |
+| `gc --out`: 計画の失敗（plan.md）、その他の I/O | 4 |
+| 中断 | 130 |
+| `verify`: 不完全、元のワールドの不一致、変更あり、使用中（output.md） | 5 |
+| `verify`: その他の I/O | 4 |
 
 Ctrl-C を受けたら中断の旗を立て、core が戻るのを待って 130 で終わる。core が戻った後に旗が立っていた場合も、`scan`、見積もり、`verify` では結果を出さずに 130 で終わる（`gc --out` が成功した後は、出力が完成しているので成功として扱う）。2回目の Ctrl-C ではすぐに終わる。
 
@@ -78,38 +80,38 @@ Ctrl-C を受けたら中断の旗を立て、core が戻るのを待って 130 
 - 警告とエラーは標準エラーに出す。
 - 色は、出力先が端末で、`NO_COLOR` が未設定か空で、`TERM` が `dumb` でなく、`--no-color` がないときだけ使う。
 - 停止したときは、理由と解決の方法（判定の信用に関する停止なら `--force`）を出す。
-- `gc --out` の完了時と `verify` の成功時に、書き戻しの手順（output.md）を出す。`complete.json` の `forced` が空でなければ、`This output was created with --force (ignored checks: ...)` を目立つように出す。
+- `gc --out` の完了時と `verify` の成功時に、書き戻しの手順（output.md）を出す。`complete.json` の `forced` が空でなければ、その出力が `--force` で作られたことと、無視した確認の ID を目立つように出す。
 
-### `wgc verify` の JSON
+### JSON
 
-```json
-{ "schema": "wgc.verify/1", "result": "ready", "source": "/abs/path", "changed": [], "forced": [] }
-```
-
-`result`: `ready`、`incomplete`、`source_mismatch`、`changed`、`in_use`、`error`（読み込みの失敗。終了コード 4）。
+`--json` の出力の形は docs/json.md が定める。
 
 ## メッセージ
 
-| 場面 | 文 |
+文面は定めない。次の内容を伝える。
+
+| 場面 | 伝える内容 |
 |---|---|
-| W-1 | `This looks like a vanilla server. Pass the world folder instead: wgc gc <suggested>` |
-| W-2 | `This looks like a world folder of a Bukkit-based server. Pass the server root folder instead.` |
-| ロック: 使用中 | `The world is in use. Stop the server or game and try again.` |
-| ロック: 書き込めない | `Cannot open session.lock for writing. Run wgc as the user that runs the server.` |
-| scan でロックを取れない | `The world is in use. Results may be inaccurate.` |
-| verify: 不完全 | `The output is incomplete.` |
-| verify: 変更あり | `The world has changed since the output was created. Swapping it in would lose those changes.` |
-| verify: 使用中 | `The world is in use.` |
-| verify: 成功 | `Ready to swap.` |
+| W-1 | バニラのサーバーのルートが指定されたので、ワールドフォルダを指定し直すこと（推測したパスを使ったコマンドの例つき） |
+| W-2 | Bukkit 系のサーバーのワールドフォルダが指定されたので、サーバーのルートフォルダを指定し直すこと |
+| ロック: 使用中 | ワールドが使用中なので、サーバーやゲームを止めてからやり直すこと |
+| ロック: 書き込めない | `session.lock`（パス）を書き込みで開けないので、サーバーと同じユーザーで実行すること |
+| scan でロックを取れない | ワールドが使用中かもしれず、結果が不正確な可能性があること |
+| verify: 不完全 | 出力が完成していないこと |
+| verify: 変更あり | 出力を作った後にワールドが変わっており、入れ替えるとその変更が失われること |
+| verify: 使用中 | ワールドが使用中であること |
+| verify: 成功 | 入れ替えてよいこと |
 
 ### 固定の注意文
 
-| ID | 場面 | 文 |
+ID は JSON に出る。
+
+| ID | 場面 | 伝える内容 |
 |---|---|---|
-| `pregenerated_chunks` | `scan`、`gc` | Pre-generated chunks are also deleted. On a pre-generated world, this undoes the pre-generation. |
-| `boundary_general` | 削除するチャンクがあるとき | Deleted chunks are regenerated with the current version and world generation settings when they are next loaded. Terrain may not line up where it meets older chunks. |
-| `no_trash` | `gc --out` の完了時 | The original world was not modified. There is no trash: once you delete the original world, it cannot be restored. Keep it until you have checked the new one. |
-| `run_official_optimize` | 古い形式のチャンクがあるとき | N chunks are in an older format. Consider running the game's Optimize World (`--forceUpgrade`). |
+| `pregenerated_chunks` | `scan`、`gc` | 事前生成したチャンクも削除されるので、事前生成したワールドではそれが取り消されること |
+| `boundary_general` | 削除するチャンクがあるとき | 削除したチャンクは次に読み込まれたときに今のバージョンと生成設定で作り直され、古いチャンクとの境目で地形がずれうること |
+| `no_trash` | `gc --out` の完了時 | 元のワールドは変更していないこと。ゴミ箱はなく、元のワールドを消すと戻せないので、新しいワールドを確かめるまで残しておくこと |
+| `run_official_optimize` | 古い形式のチャンクがあるとき | 古い形式のチャンクの数と、ゲームの Optimize World（`--forceUpgrade`）の実行を勧めること |
 
 ## ヘルプ
 

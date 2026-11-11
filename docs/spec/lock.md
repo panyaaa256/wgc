@@ -1,65 +1,42 @@
-# session.lock のロック（P3）
-
-実装先: `core::lock`。OS の呼び出し（unsafe）は `core::sys` の中だけに置く（空き容量と実行ユーザーの判定も同じ場所）。
+# session.lock のロック
 
 ## 要件
 
-- Java の `FileChannel.tryLock` と互いに排他になる OS のロックを、待たずに試す。
-- ゲームは起動時に `session.lock` を作成し、`☃` を書いて fsync してからロックする。そのため、ロック中にゲームを起動しようとしても起動しない。また、ゲームが起動すると更新日時が必ず変わる（`wgc verify` はこれを使う）。
-- 20w14a（`DV_SESSION_LOCK_OS`）より前のゲームはロックを使わないので、起動中かどうかを検出できない。
+- ゲームが使用中のワールドを書き出さない。そのために、ゲームと同じ `session.lock` のロックを、待たずに試す。
+- wgc がロックを持っている間は、ゲームはそのワールドで起動できない。ゲームがロックを持っている間は、wgc はロックを取れない。
+- ワールドが複数のワールドフォルダからなるとき（Bukkit）は、すべてのフォルダの `session.lock` をロックする。同じフォルダは一度だけロックする。
+- ロックは、ワールドの読み込みと出力が終わるまで保持し続ける。
+- `session.lock` を作らず、中身も書き換えない（元のワールドを書き換えない原則の範囲内）。
 
-## 実装
+## 前提となる事実
 
-| OS | 方法 | crate |
-|---|---|---|
-| Linux | OFD ロック（`fcntl(F_OFD_SETLK)`、`F_WRLCK`、ファイル全体） | `libc` |
-| その他の Unix | `fcntl(F_SETLK)` | `libc` |
-| Windows | `LockFileEx`（`LOCKFILE_EXCLUSIVE_LOCK \| LOCKFILE_FAIL_IMMEDIATELY`） | `windows-sys` |
+- ゲームは起動時に `session.lock` を作成し、`☃` を書いて fsync してからロックする。そのため、ゲームが起動すると更新日時が必ず変わる（`wgc verify` はこれを使う）。
+- ゲームのロックは Java の `FileChannel.tryLock` で、Unix では `fcntl` のレコードロック、Windows では `LockFileEx` になる。Linux では `flock` は `fcntl` のロックと干渉しないので、`flock` では排他にならない。
+- `fcntl` のレコードロックは、同じプロセスが同じファイルの別の記述子を閉じると解放される。
+- 20w14a（versions.md の `DV_SESSION_LOCK_OS`）より前のゲームはロックを使わないので、起動中かどうかを検出できない。
 
-- Unix で `flock` は使わない（Linux では Java の `fcntl` ロックと干渉しない。`File::try_lock`、`fs2`、`fs4` も `flock`）。
-- POSIX ロックは、同じプロセスで同じファイルの別の記述子を閉じると解放される。ロック中は `session.lock` を他の目的で開かない（`stat` はよい）。
-- 読み書き・作成なし・切り詰めなしで開き、中身は書き換えない。
+## 区別する失敗
 
-## API
-
-```rust
-pub struct SessionLock { /* 開いたファイル */ }   // Drop で解放する
-
-impl SessionLock {
-    pub fn try_acquire(world_folder: &Path) -> Result<SessionLock, LockError>;
-    pub fn is_locked(world_folder: &Path) -> Result<bool, LockError>; // 取れたらすぐ解放
-}
-
-pub struct SessionLocks(Vec<SessionLock>);
-impl SessionLocks {
-    pub fn try_acquire_all(layout: &WorldLayout) -> Result<SessionLocks, LockError>; // 正規化して重複を除き、順にロック
-}
-```
-
-## エラー
-
-```rust
-pub enum LockError {
-    InUse { path: PathBuf },
-    Missing { path: PathBuf },        // session.lock がない（L-1）
-    NotWritable { path: PathBuf },    // 書き込みで開けない
-    HeldByThisProcess { path: PathBuf }, // このプロセスがすでに持っている（開き直すとロックが外れうるので拒否する）
-    Io { path: PathBuf, source: io::Error },
-}
-```
+| 失敗 | 意味 |
+|---|---|
+| 使用中 | 他のプロセス（ゲーム）がロックを持っている |
+| ない（L-1） | `session.lock` が存在しない |
+| 書き込めない | `session.lock` を書き込みで開けない（権限など） |
+| このプロセスが保持中 | wgc 自身がすでにロックを持っている（開き直すとロックが外れうるので拒否する） |
+| その他の I/O | 上記以外の読み書きの失敗 |
 
 ## コマンドごとの扱い
 
-| コマンド | `InUse` | `Missing` | `NotWritable`、`Io` |
-|---|---|---|---|
-| `gc --out` | 停止 | L-1 で停止（`--force` でロックなしで続行し、`Warning::LockSkipped`） | 停止（サーバーと同じユーザーで実行するよう案内する） |
-| `scan`、`gc` の見積もり | `Warning::LockUnavailable` で続行 | 同左 | 同左 |
-| `verify` | 失敗 | 失敗しない（ロックを使わない状態） | 失敗 |
+| コマンド | 使用中 | ない（L-1） | 書き込めない | その他の I/O |
+|---|---|---|---|---|
+| `gc --out` | 停止 | 停止（`--force` でロックなしで続行し、その旨を警告する） | 停止（サーバーと同じユーザーで実行するよう案内する） | エラーで中止 |
+| `scan`、`gc` の見積もり | ロックを取れなかった旨を警告して続行 | 同左 | 同左 | 同左 |
+| `verify` | 失敗 | 失敗しない（ロックを使わない状態） | 失敗 | 失敗 |
 
-ロックを取れたワールドの DataVersion が `DV_SESSION_LOCK_OS` より小さければ、`Warning::PreLockVersion` を出す。
+ロックを取れたワールドが 20w14a より前のバージョンなら、起動中かどうかを検出できない旨を警告する。
 
 ## 受け入れ条件
 
-- Java が `session.lock` をロックしている間は `InUse` になり、`SessionLock` を持っている間は Java がロックを取れない（Linux の統合テスト）。
-- `SessionLock` を持ったまま他の処理（ワールドの読み込み、出力）をしても、ロックが保持されている。
-- `Drop` で解放される。
+- Java が `session.lock` をロックしている間は「使用中」になり、wgc がロックを持っている間は Java がロックを取れない（Linux の統合テスト）。
+- ロックを持ったままワールドの読み込みと出力をしても、ロックが保持されている。
+- 処理を終えるとロックが解放される。

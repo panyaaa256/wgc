@@ -1,32 +1,19 @@
-# InhabitedTime の信用の確認（P5）
-
-実装先: `core::trust`。
+# InhabitedTime の信用の確認
 
 GC は「InhabitedTime が 0 なら、スペクテイター以外のプレイヤーが半径 128 ブロック以内に来たことがない」ことを前提にする（バニラでは、エンティティが処理される範囲で、128 ブロック以内にプレイヤーがいるチャンクに毎 tick 加算される）。この前提を確かめる。
 
-```rust
-pub fn check_trust(plan: &Plan) -> TrustReport;
-// Plan を使わずに T-1〜T-5 を確かめる。gc --out が、すべてのリージョンファイルを読む前に使う
-pub fn check_trust_before_plan(layout: &WorldLayout, gc_dims: Option<&BTreeSet<DimensionId>>, skip_t3: bool) -> TrustReport;
-```
-
-`check_trust_before_plan` は、Plan の代わりに次のものを直接読む。どちらも Plan と同じ処理で読むので、ファイルが変わらない限り `check_trust` と同じ結果になる。
-
-- T-3: プレイヤーのいるチャンクを含むリージョンファイル（と外部の `.mcc`）だけ。各ファイルは一度だけ全体を読み、Plan と同じ解析で InhabitedTime を求める（展開するのはプレイヤーのいるチャンクだけ）。読めなければ「確認できない」
-- T-5: 対象のディメンションの強制読み込みチャンクの情報（Plan の `protection_unknown` の代わり）
-
-`skip_t3` のときは、T-3 のために何も読まず、結果から T-3 を除く。`gc --out` は、`--force` で T-3 が許されているときにこれを使う。許された T-3 では止まらないので、早く確かめる意味がない。T-3 を無視したかどうか（`forced` に入れるか）は、Plan に対する `check_trust` の結果で決める。
-
-読めないファイルはエラーにせず、その確認を「確認できない」にする。
+- 読めないファイルはエラーにせず、その確認を「確認できない」にする。
+- `gc --out` は、すべてのリージョンファイルを読む前に T-1〜T-5 を確かめる（output.md「実行の保証」）。この結果は、ファイルが変わらない限り、計画を作ったあとに確かめた結果と同じになる（`--dimension` の指定、外部の `.mcc` にあるチャンクを含む）。
+- `--force` で T-3 が許されているときは、リージョンファイルを読む前の確認では T-3 のために何も読まない（許された T-3 では止まらないので、早く確かめる意味がない）。T-3 を無視したかどうか（`forced` に入れるか）は、計画を作ったあとの確認の結果で決める。
 
 ## 確認の一覧と範囲
 
-GC の対象のディメンション（`plan.gc_dims`、指定がなければ全ディメンション）に関係する範囲だけを見る。
+GC の対象のディメンション（`--dimension`、指定がなければ全ディメンション）に関係する範囲だけを見る。
 
 | ID | 確認 | 対象 | 範囲 |
 |---|---|---|---|
 | T-1 | Paper の設定 | Bukkit のレイアウト | 対象のディメンションを含むワールド |
-| T-2 | モブのスポーン | Bukkit のレイアウトで DataVersion ≥ `DV_1_21_5` | 対象のディメンションを含むワールド |
+| T-2 | モブのスポーン | Bukkit のレイアウトで DataVersion ≥ 4325（versions.md の `DV_1_21_5`） | 対象のディメンションを含むワールド |
 | T-3 | プレイヤーの位置 | すべて | 対象のディメンションにいるプレイヤー |
 | T-4 | バージョン | すべて | ワールド全体 |
 | T-5 | 強制読み込みチャンクの情報 | すべて | 対象のディメンション |
@@ -35,7 +22,7 @@ GC の対象のディメンション（`plan.gc_dims`、指定がなければ全
 
 `fixed-chunk-inhabited-time` が 0 以上だと、全チャンクの値が固定される。
 
-ワールドごとの `paper-world.yml` と既定値の `paper-world-defaults.yml`（場所は world-layout「Paper の設定ファイル」）の `chunks.fixed-chunk-inhabited-time` を、`yaml-rust2` で読む。
+ワールドごとの `paper-world.yml` と既定値の `paper-world-defaults.yml`（場所は world-layout「Paper の設定ファイル」）の `chunks.fixed-chunk-inhabited-time` で判定する。
 
 | ワールドごとの値 | 判定 |
 |---|---|
@@ -63,7 +50,7 @@ Paper 1.21.5 以降では、ゲームルール `spawn_mobs`（旧 `doMobSpawning
 
 プレイヤーデータのフォルダ、UUID の名前のプレイヤーファイル、`level.dat` のどれかを読めなければ「確認できない」（フォルダがないのはよい）。ホストのプレイヤーファイルと `Data.Player` の位置とディメンションが同じなら、1人として数える。
 
-各プレイヤーについて、次の場合は飛ばす: スペクテイター、`Dimension` がマップにないか GC の対象外、フィールドを読めない、チャンク `(floor(x / 16), floor(z / 16))` が存在しない、InhabitedTime が `Value` 以外。残りで `Value(0)` なら「該当」。
+各プレイヤーについて、次の場合は飛ばす: スペクテイター、`Dimension` がディメンションマップにないか GC の対象外、フィールドを読めない、チャンク `(floor(x / 16), floor(z / 16))` が存在しない、そのチャンクの InhabitedTime が 0 以上の値でない（タグなし、型の違い、負の値、内容エラー）。残りで InhabitedTime が 0 なら「該当」。
 
 | 状況 | 判定 |
 |---|---|
@@ -73,52 +60,36 @@ Paper 1.21.5 以降では、ゲームルール `spawn_mobs`（旧 `doMobSpawning
 
 ## T-4: バージョン
 
-`level.dat` の DataVersion > `DV_MAX_KNOWN` なら「確認できない」。
+`level.dat` の DataVersion が `DV_MAX_KNOWN`（versions.md）より大きければ「確認できない」。
 
 ## T-5: 強制読み込みチャンクの情報
 
-Plan の `protection_unknown` に対象のディメンションがあれば「確認できない」。
+対象のディメンションのどれかで、強制読み込みチャンクを確認できなければ（world-layout「強制読み込みチャンク」）、「確認できない」。
 
-## 結果のモデル
+## 結果
 
-```rust
-pub struct TrustReport {
-    pub checks: Vec<CheckResult>,              // T-1..T-5 の順（skip_t3 のときは T-3 がない）
-}
+- 各確認の結果は、合格、不合格、確認できない、対象外（「確認の一覧と範囲」の対象に当たらない）のどれか。
+- 結果は T-1〜T-5 の順に並べる。
+- 不合格には、不合格になった対象をすべて記録する。「確認できない」には、理由を1つ記録する。
 
-pub struct CheckResult {
-    pub id: GuardId,                           // T1..T5
-    pub status: CheckStatus,
-}
+| 不合格の対象 | 記録する内容 |
+|---|---|
+| T-1: 値が 0 以上の Paper の設定 | ファイル、値 |
+| T-2: モブのスポーンが無効なワールド | ワールドフォルダ |
+| T-3: InhabitedTime が 0 のチャンクにいるプレイヤー | UUID、ディメンション、チャンクの位置 |
 
-pub enum CheckStatus {
-    Pass,
-    Fail(Vec<TrustDetail>),
-    Unknown(UnknownReason),
-    NotApplicable,
-}
-
-pub enum TrustDetail {
-    PaperFixedInhabitedTime { file: PathBuf, value: i64 },
-    MobSpawningDisabled { world_folder: PathBuf },
-    PlayerInZeroChunk { uuid: String, dimension: DimensionId, pos: ChunkPos },
-}
-
-pub enum UnknownReason {
-    UnreadableFile { path: PathBuf },
-    UnexpectedValue { path: PathBuf, key: String },
-    UnknownVersion(DataVersion),
-    NoPlayersChecked,
-    ForcedChunksUnknown(BTreeSet<DimensionId>),
-}
-```
-
-`TrustReport::stops()` は、不合格か「確認できない」の確認の ID を返す（P7 が使う）。
+| 確認できない理由 | 記録する内容 |
+|---|---|
+| ファイルを読めない | パス |
+| 値が想定外 | パス、キー |
+| 知らないバージョン | DataVersion |
+| 確認できたプレイヤーがいない | なし |
+| 強制読み込みチャンクを確認できない | ディメンションの ID |
 
 ## 判定の使い方
 
 - `scan` と見積もり: すべて表示し、中止しない。
-- `gc --out`: 不合格か「確認できない」が1つでもあれば、何も書かずに中止する（`OutputError::Stopped`）。すべてのリージョンファイルを読む前に `check_trust_before_plan` で確かめ、L-1 とまとめて中止する（output.md「実行の順序」）。`--force` で無視を許された ID だけは続行し、`Warning::Forced(id)` を出して `complete.json` の `forced` に記録する。T-5 を無視すると強制読み込みの保護がないまま削除する。
+- `gc --out`: 不合格か「確認できない」が1つでもあれば、何も書かずに中止する。リージョンファイルを読む前の確認で止まる場合は、L-1 とまとめて中止する（output.md「実行の保証」）。`--force` で無視を許された ID だけは続行し、無視した旨を警告して `complete.json` の `forced` に記録する。T-5 を無視すると強制読み込みの保護がないまま削除する。
 
 ## 受け入れ条件
 
@@ -127,6 +98,6 @@ pub enum UnknownReason {
 - T-3: スペクテイター、存在しないチャンク、マップにないディメンション、負の値が飛ばされる。0 のチャンクにいるプレイヤーが 1 人で不合格、0 人で「確認できない」。`Dimension` の Int と String、`Data.Player` を扱える。
 - `--dimension minecraft:the_end` のとき、オーバーワールドのプレイヤーや強制読み込みの情報では止まらない。
 - `gc --out` が、不合格か「確認できない」で中止し、許された ID だけ続行して `forced` に記録する。
-- `check_trust_before_plan` と `check_trust` の結果が同じになる（`--dimension` の指定、外部の `.mcc` にあるチャンクを含む）。
+- リージョンファイルを読む前の確認と、計画を作ったあとの確認の結果が同じになる（`--dimension` の指定、外部の `.mcc` にあるチャンクを含む）。
 - `gc --out` が、T-1〜T-5、L-1 の停止では、すべてのリージョンファイルを読む前に中止する。
-- `--force` で T-3 が許されているとき、`gc --out` は Plan の前に T-3 のための読み込みをしない。T-3 が Plan に対して合格すれば `forced` に入らない。
+- `--force` で T-3 が許されているとき、`gc --out` は計画を作る前に T-3 のための読み込みをしない。T-3 が計画に対して合格すれば `forced` に入らない。
