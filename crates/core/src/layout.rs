@@ -173,7 +173,8 @@ impl<P> WorldLayout<P> {
             .find(|id| !self.dimensions.iter().any(|d| d.id == **id))
     }
 
-    fn known_version(&self) -> Result<(), UnknownReason<P>> {
+    /// Fails when the world's DataVersion is newer than any version the tool knows.
+    pub fn known_version(&self) -> Result<(), UnknownReason<P>> {
         match self.data_version {
             Some(v) if v > DV_MAX_KNOWN => Err(UnknownReason::UnknownVersion(v)),
             _ => Ok(()),
@@ -203,6 +204,17 @@ fn read_optional<S: WorldSource, T>(
     }
 }
 
+/// The folder whose game rules apply to `dim`: the dimension folder on Bukkit
+/// 26.1 and later, the dimension's world folder on older Bukkit, and the main
+/// world folder otherwise.
+pub fn game_rules_folder<'a, P>(layout: &'a WorldLayout<P>, dim: &'a Dimension<P>) -> &'a P {
+    match layout.kind {
+        LayoutKind::Bukkit => &dim.dir,
+        LayoutKind::BukkitLegacy => &dim.world_folder,
+        LayoutKind::Vanilla | LayoutKind::VanillaLegacy => &layout.main_world_folder,
+    }
+}
+
 /// Whether mob spawning is enabled for `dim` (game rule `spawn_mobs`, formerly `doMobSpawning`).
 ///
 /// A rule that is not stored has its default value, enabled.
@@ -222,12 +234,13 @@ pub fn spawn_mobs<S: WorldSource>(
             layout.level_spawn_mobs,
         )
     };
+    let folder = game_rules_folder(layout, dim);
     Known::from((|| {
         layout.known_version()?;
         let (path, value) = match layout.kind {
-            LayoutKind::Bukkit => game_rules(&dim.dir)?,
-            LayoutKind::BukkitLegacy if dim.world_folder != layout.main_world_folder => {
-                let path = source.join(&dim.world_folder, "level.dat");
+            LayoutKind::Bukkit => game_rules(folder)?,
+            LayoutKind::BukkitLegacy if *folder != layout.main_world_folder => {
+                let path = source.join(folder, "level.dat");
                 match read_optional(source, &path, nbt::read_level_info)? {
                     Some(info) => (path, info.spawn_mobs),
                     None => return Err(UnknownReason::UnreadableFile { path }),
@@ -235,7 +248,7 @@ pub fn spawn_mobs<S: WorldSource>(
             }
             LayoutKind::BukkitLegacy => main_level_rule(),
             LayoutKind::Vanilla | LayoutKind::VanillaLegacy if layout.has_26_1_files() => {
-                game_rules(&layout.main_world_folder)?
+                game_rules(folder)?
             }
             LayoutKind::Vanilla | LayoutKind::VanillaLegacy => main_level_rule(),
         };

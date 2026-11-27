@@ -13,12 +13,12 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::layout::{self, Dimension, LayoutKind, WorldLayout};
+use crate::layout::{self, Dimension, WorldLayout};
 use crate::nbt::{self, PlayerDimension, PlayerSummary};
 use crate::plan::{Inhabited, Plan, forceload_protection, is_targeted};
 use crate::source::{Config, WorldSource};
 use crate::types::{ChunkPos, DimensionId, GuardId, Known, UnknownReason};
-use crate::versions::{DV_1_21_5, DV_FILES_26_1, DV_MAX_KNOWN};
+use crate::versions::DV_1_21_5;
 
 /// Results of the trust checks, in ID order T-1..T-5 (T-3 is absent when
 /// [`check_trust_before_plan`] was told to skip it). Each check is described
@@ -253,15 +253,16 @@ fn paper_config<S: WorldSource>(
     layout: &WorldLayout<S::Path>,
     targeted: &[&Dimension<S::Path>],
 ) -> CheckStatus<S::Path> {
-    let Some(server_root) = layout
-        .server_root
-        .as_ref()
-        .filter(|_| layout.kind.is_bukkit())
-    else {
+    if !layout.kind.is_bukkit() {
+        return CheckStatus::NotApplicable;
+    }
+    let (Some(server_root), Some(defaults)) = (
+        layout.server_root.as_ref(),
+        layout::paper_defaults_config(source, layout),
+    ) else {
         return CheckStatus::NotApplicable;
     };
     let result = (|| {
-        let defaults = source.join(server_root, "config/paper-world-defaults.yml");
         let legacy = source.join(server_root, "paper.yml");
         let mut details = BTreeSet::new();
         // Paper 1.19 moved paper.yml to config/; paper.yml alone means an older Paper.
@@ -335,12 +336,8 @@ fn mob_spawning<S: WorldSource>(
         match layout::spawn_mobs(source, layout, dim) {
             Known::Value(true) => {}
             Known::Value(false) => {
-                let folder = match layout.kind {
-                    LayoutKind::Bukkit => dim.dir.clone(),
-                    _ => dim.world_folder.clone(),
-                };
                 details.insert(TrustDetail::MobSpawningDisabled {
-                    world_folder: folder,
+                    world_folder: layout::game_rules_folder(layout, dim).clone(),
                 });
             }
             Known::Unknown(reason) => {
@@ -388,7 +385,7 @@ fn read_players<S: WorldSource>(
         players.push((stem.to_owned(), player));
     }
 
-    if layout.data_version.is_none_or(|v| v < DV_FILES_26_1) {
+    if !layout.has_26_1_files() {
         let level = source.join(&layout.main_world_folder, "level.dat");
         let host =
             read_gzip(source, &level, nbt::read_level_player).ok_or_else(|| unreadable(&level))?;
@@ -534,9 +531,9 @@ fn read_gzip<S: WorldSource, T>(
 /// T-4: unknown when the world's DataVersion is newer than any version wgc
 /// knows, since its InhabitedTime behavior has not been checked.
 fn version<P>(layout: &WorldLayout<P>) -> CheckStatus<P> {
-    match layout.data_version {
-        Some(v) if v > DV_MAX_KNOWN => CheckStatus::Unknown(UnknownReason::UnknownVersion(v)),
-        _ => CheckStatus::Pass,
+    match layout.known_version() {
+        Ok(()) => CheckStatus::Pass,
+        Err(reason) => CheckStatus::Unknown(reason),
     }
 }
 
