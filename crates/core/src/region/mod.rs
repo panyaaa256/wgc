@@ -7,8 +7,11 @@
 mod compression;
 mod write;
 
-use std::collections::BTreeSet;
-use std::fmt;
+use alloc::collections::BTreeSet;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::types::{ChunkIndex, ChunkPos, FileKind, RegionPos};
 
@@ -333,12 +336,21 @@ impl RegionFile {
     }
 }
 
+/// The big-endian `u32` at `at`. Every caller checks the bounds first; bytes
+/// past the end would read as zero rather than panic.
 fn be_u32(bytes: &[u8], at: usize) -> u32 {
-    u32::from_be_bytes(bytes[at..at + 4].try_into().expect("4 bytes"))
+    bytes
+        .get(at..)
+        .and_then(<[u8]>::first_chunk)
+        .map_or(0, |b| u32::from_be_bytes(*b))
 }
 
-#[cfg(test)]
-pub(crate) mod test_util {
+/// Builders for synthetic test data, shared with the crates that depend on this one.
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub mod test_util {
+    use alloc::vec;
+
     use super::*;
 
     /// A chunk to place in a synthetic region file.

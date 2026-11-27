@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use wgc_core::types::{DimensionId, GuardId};
+use wgc_fs::types::{DimensionId, GuardId};
 
 #[derive(Debug, Parser)]
 #[command(

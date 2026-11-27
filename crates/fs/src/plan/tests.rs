@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -6,7 +7,8 @@ use super::*;
 use crate::layout::test_util::{gzip, level_dat, write};
 use crate::nbt::test_util::{V, doc, pack};
 use crate::region::test_util::{Chunk, build, chunk};
-use crate::types::NoopObserver;
+use crate::types::{ChunkIndex, ChunkPos, DimensionId, FileKind, NoopObserver};
+use crate::world::{FsWorld, Rayon};
 
 fn zlib(bytes: &[u8]) -> Vec<u8> {
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -60,7 +62,14 @@ fn plan(path: &Path) -> Plan {
 
 fn plan_with(path: &Path, options: PlanOptions) -> Plan {
     let layout = crate::layout::detect(path).unwrap();
-    build_plan(&layout, &options, &NoopObserver, &AtomicBool::new(false)).unwrap()
+    wgc::plan::build_plan(
+        &FsWorld::new(&layout),
+        &Rayon,
+        &options,
+        &NoopObserver,
+        &AtomicBool::new(false),
+    )
+    .unwrap()
 }
 
 fn decisions(plan: &Plan) -> BTreeMap<ChunkPos, Decision> {
@@ -292,25 +301,6 @@ fn empty_files_and_player_temp_files_are_omitted() {
 }
 
 #[test]
-fn player_temp_file_pattern() {
-    assert!(is_player_temp_file(
-        "0123abcd-0000-0000-0000-00000000beef-1.dat"
-    ));
-    assert!(!is_player_temp_file(
-        "0123abcd-0000-0000-0000-00000000beef.dat"
-    ));
-    assert!(!is_player_temp_file(
-        "0123ABCD-0000-0000-0000-00000000beef-1.dat"
-    ));
-    assert!(!is_player_temp_file(
-        "0123abcd-0000-0000-0000-00000000beef-.dat"
-    ));
-    assert!(!is_player_temp_file(
-        "0123abcd-0000-0000-0000-00000000beef-1.dat_old"
-    ));
-}
-
-#[test]
 fn untargeted_dimensions_only_get_clean_rules() {
     let t = world(&[
         ("region/r.0.0.mca", build(&[c(0, 0)])),
@@ -407,11 +397,12 @@ fn plans_are_deterministic() {
 fn cancellation() {
     let t = world(&[("region/r.0.0.mca", build(&[c(0, 0)]))]);
     let layout = crate::layout::detect(t.path()).unwrap();
-    let result = build_plan(
-        &layout,
+    let result = wgc::plan::build_plan(
+        &FsWorld::new(&layout),
+        &Rayon,
         &PlanOptions::default(),
         &NoopObserver,
         &AtomicBool::new(true),
     );
-    assert!(matches!(result, Err(PlanError::Cancelled)));
+    assert!(matches!(result, Err(wgc::plan::PlanError::Cancelled)));
 }

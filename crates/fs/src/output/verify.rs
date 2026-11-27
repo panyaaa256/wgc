@@ -11,11 +11,12 @@ use rayon::prelude::*;
 use super::copy::{Written, WrittenFile};
 use super::record::{ChangedFile, Complete, SourceState};
 use super::{OutputError, RECORD_DIR, VerifyFailure, destination, io_err, is_excluded};
+use crate::Outcome;
 use crate::layout::WorldFiles;
 use crate::lock::{LockError, SessionLock};
 use crate::plan::{ExternalAction, FileAction, Plan};
 use crate::region::RegionFile;
-use crate::types::{Observer, Progress};
+use crate::types::{Observer, Progress, Warning};
 
 /// Checks V-1..V-6. All failures are collected.
 pub(crate) fn check_output(
@@ -24,7 +25,7 @@ pub(crate) fn check_output(
     written: &Written,
     out: &Path,
     state: &SourceState,
-    observer: &dyn Observer,
+    observer: &dyn Observer<Warning>,
     cancel: &AtomicBool,
 ) -> Result<(), OutputError> {
     // Counting and reporting under one lock keeps `done` increasing for the observer.
@@ -229,6 +230,68 @@ pub enum VerifyError {
     },
 }
 
+impl VerifyError {
+    /// How a `wgc verify` that ended with this error ended.
+    pub const fn outcome(&self) -> Outcome {
+        match self {
+            VerifyError::Io { .. } => Outcome::Failed,
+            _ => Outcome::NotReady,
+        }
+    }
+
+    /// The result as `wgc.verify/1` names it.
+    const fn result_name(&self) -> &'static str {
+        match self {
+            VerifyError::Incomplete { .. } => "incomplete",
+            VerifyError::SourceMismatch { .. } => "source_mismatch",
+            VerifyError::Changed(_) => "changed",
+            VerifyError::InUse { .. } => "in_use",
+            VerifyError::Io { .. } => "error",
+        }
+    }
+}
+
+/// The `wgc verify` report (`wgc.verify/1`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct VerifyJson {
+    schema: &'static str,
+    result: &'static str,
+    source: Option<String>,
+    changed: Vec<String>,
+    forced: Vec<String>,
+}
+
+impl VerifyJson {
+    pub fn new(result: &Result<VerifyOutcome, VerifyError>) -> Self {
+        let (name, source, forced) = match result {
+            Ok(ok) => (
+                "ready",
+                Some(ok.source.display().to_string()),
+                ok.forced.clone(),
+            ),
+            Err(e) => (e.result_name(), None, Vec::new()),
+        };
+        let changed = match result {
+            Err(VerifyError::Changed(changed)) => changed
+                .iter()
+                .map(|c| match c {
+                    ChangedFile::Added(p) | ChangedFile::Removed(p) | ChangedFile::Modified(p) => {
+                        p.clone()
+                    }
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        VerifyJson {
+            schema: "wgc.verify/1",
+            result: name,
+            source,
+            changed,
+            forced,
+        }
+    }
+}
+
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, VerifyError> {
     let bytes = fs::read(path).map_err(|source| VerifyError::Io {
         path: path.to_path_buf(),
@@ -297,4 +360,42 @@ pub fn verify(out: &Path, source: Option<&Path>) -> Result<VerifyOutcome, Verify
         layout: state.layout,
         world_folders: state.world_folders,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json(result: &Result<VerifyOutcome, VerifyError>) -> String {
+        serde_json::to_string(&VerifyJson::new(result)).unwrap()
+    }
+
+    #[test]
+    fn verify_json_golden() {
+        let ready = Ok(VerifyOutcome {
+            source: PathBuf::from("/abs/server"),
+            forced: vec!["T-1".to_owned(), "L-1".to_owned()],
+            layout: "bukkit".to_owned(),
+            world_folders: vec!["world".to_owned()],
+        });
+        assert_eq!(
+            json(&ready),
+            concat!(
+                r#"{"schema":"wgc.verify/1","result":"ready","source":"/abs/server","#,
+                r#""changed":[],"forced":["T-1","L-1"]}"#,
+            )
+        );
+
+        let changed = Err(VerifyError::Changed(vec![
+            ChangedFile::Modified("world/level.dat".to_owned()),
+            ChangedFile::Added("world/region/r.0.0.mca".to_owned()),
+        ]));
+        assert_eq!(
+            json(&changed),
+            concat!(
+                r#"{"schema":"wgc.verify/1","result":"changed","source":null,"#,
+                r#""changed":["world/level.dat","world/region/r.0.0.mca"],"forced":[]}"#,
+            )
+        );
+    }
 }

@@ -1,7 +1,11 @@
 //! Basic types shared by every module.
 
-use std::fmt;
-use std::str::FromStr;
+use alloc::borrow::ToOwned;
+use alloc::collections::BTreeSet;
+use alloc::format;
+use alloc::string::String;
+use core::fmt;
+use core::str::FromStr;
 
 /// Region coordinates (`r.<x>.<z>.mca`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -37,8 +41,8 @@ impl ChunkPos {
     }
 
     /// Packs into the game's `long` form; inverse of [`ChunkPos::from_packed`].
-    #[cfg(test)]
-    pub(crate) const fn to_packed(self) -> i64 {
+    #[cfg(any(test, feature = "test-util"))]
+    pub const fn to_packed(self) -> i64 {
         (self.x as u32 as i64) | ((self.z as i64) << 32)
     }
 
@@ -267,15 +271,15 @@ impl FromStr for GuardId {
     }
 }
 
-/// A value that was read, or why it could not be confirmed.
+/// A value that was read, or why it could not be confirmed. `P` names files.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Known<T> {
+pub enum Known<T, P> {
     Value(T),
-    Unknown(UnknownReason),
+    Unknown(UnknownReason<P>),
 }
 
-impl<T> From<Result<T, UnknownReason>> for Known<T> {
-    fn from(result: Result<T, UnknownReason>) -> Self {
+impl<T, P> From<Result<T, UnknownReason<P>>> for Known<T, P> {
+    fn from(result: Result<T, UnknownReason<P>>) -> Self {
         match result {
             Ok(v) => Known::Value(v),
             Err(reason) => Known::Unknown(reason),
@@ -283,60 +287,14 @@ impl<T> From<Result<T, UnknownReason>> for Known<T> {
     }
 }
 
-/// Why something, such as a trust check, could not be confirmed.
+/// Why something, such as a trust check, could not be confirmed. `P` names files.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum UnknownReason {
-    UnreadableFile {
-        path: std::path::PathBuf,
-    },
-    UnexpectedValue {
-        path: std::path::PathBuf,
-        key: String,
-    },
+pub enum UnknownReason<P> {
+    UnreadableFile { path: P },
+    UnexpectedValue { path: P, key: String },
     UnknownVersion(DataVersion),
     NoPlayersChecked,
-    ForcedChunksUnknown(std::collections::BTreeSet<DimensionId>),
-}
-
-/// Receives progress and warnings from long-running operations.
-/// `wgc-core` never prints; the CLI implements this.
-pub trait Observer: Send + Sync {
-    fn progress(&self, p: Progress);
-    fn warn(&self, w: Warning);
-}
-
-/// Progress of a long-running operation, counted in region triples.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Progress {
-    Reading { done: u64, total: u64 },
-    Writing { done: u64, total: u64 },
-    Verifying { done: u64, total: u64 },
-}
-
-/// Something the user should know that does not stop the operation.
-#[derive(Debug)]
-pub enum Warning {
-    /// `scan` or an estimate could not lock the world.
-    LockUnavailable(crate::lock::LockError),
-    /// L-1 was ignored with `--force`: the world is not locked.
-    LockSkipped,
-    /// The world is older than `DV_SESSION_LOCK_OS`: a running game cannot be detected.
-    PreLockVersion(DataVersion),
-    /// Output files could not get the original owner (reported once).
-    OwnerNotPreserved,
-    SymlinkFollowed(std::path::PathBuf),
-    SpecialFileSkipped(std::path::PathBuf),
-    /// A failed check was ignored with `--force`.
-    Forced(GuardId),
-}
-
-/// An [`Observer`] that ignores everything.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoopObserver;
-
-impl Observer for NoopObserver {
-    fn progress(&self, _: Progress) {}
-    fn warn(&self, _: Warning) {}
+    ForcedChunksUnknown(BTreeSet<DimensionId>),
 }
 
 #[cfg(test)]

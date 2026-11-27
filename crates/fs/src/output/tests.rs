@@ -8,7 +8,8 @@ use crate::layout::test_util::{gzip, write};
 use crate::nbt::test_util::{V, doc};
 use crate::region::RegionFile;
 use crate::region::test_util::{build, chunk};
-use crate::types::{NoopObserver, Progress};
+use crate::types::{NoopObserver, Observer, Progress, Warning};
+use crate::world::{FsWorld, Rayon};
 
 fn zlib(bytes: &[u8]) -> Vec<u8> {
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -66,9 +67,24 @@ fn options(out: &Path) -> GcOptions {
     }
 }
 
+fn gc(
+    layout: &WorldLayout,
+    options: &GcOptions,
+    observer: &dyn Observer<Warning>,
+    cancel: &AtomicBool,
+) -> Result<GcOutcome, OutputError> {
+    Ok(wgc::gc::run_gc(
+        &FsWorld::new(layout),
+        &Rayon,
+        options,
+        observer,
+        cancel,
+    )?)
+}
+
 fn run(world: &Path, out: &Path) -> Result<GcOutcome, OutputError> {
     let layout = crate::layout::detect(world).unwrap();
-    run_gc(
+    gc(
         &layout,
         &options(out),
         &NoopObserver,
@@ -149,7 +165,7 @@ fn trust_stops_unless_forced() {
     let layout = crate::layout::detect(w.path()).unwrap();
     let mut opts = options(&o.path().join("out"));
     opts.allowed.clear();
-    let err = run_gc(&layout, &opts, &NoopObserver, &AtomicBool::new(false)).unwrap_err();
+    let err = gc(&layout, &opts, &NoopObserver, &AtomicBool::new(false)).unwrap_err();
     assert!(matches!(err, OutputError::Stopped(ids) if ids == [GuardId::T3]));
     assert!(!o.path().join("out").exists());
 }
@@ -166,7 +182,7 @@ fn missing_session_lock_is_l1() {
     let layout = crate::layout::detect(w.path()).unwrap();
     let mut opts = options(&o.path().join("b"));
     opts.allowed.insert(GuardId::L1);
-    let outcome = run_gc(&layout, &opts, &NoopObserver, &AtomicBool::new(false)).unwrap();
+    let outcome = gc(&layout, &opts, &NoopObserver, &AtomicBool::new(false)).unwrap();
     assert!(outcome.forced.contains(&GuardId::L1));
 }
 
@@ -174,7 +190,7 @@ fn missing_session_lock_is_l1() {
 #[derive(Default)]
 struct ReadCounter(Mutex<u64>);
 
-impl crate::types::Observer for ReadCounter {
+impl crate::types::Observer<Warning> for ReadCounter {
     fn progress(&self, p: Progress) {
         if matches!(p, Progress::Reading { .. }) {
             *self.0.lock().unwrap() += 1;
@@ -193,7 +209,7 @@ fn every_stop_comes_before_reading_the_regions() {
     let mut opts = options(&o.path().join("out"));
     opts.allowed.clear();
     let reads = ReadCounter::default();
-    let err = run_gc(&layout, &opts, &reads, &AtomicBool::new(false)).unwrap_err();
+    let err = gc(&layout, &opts, &reads, &AtomicBool::new(false)).unwrap_err();
     assert!(
         matches!(&err, OutputError::Stopped(ids) if ids == &[GuardId::T3, GuardId::T5, GuardId::L1]),
         "{err:?}"
@@ -205,7 +221,7 @@ fn every_stop_comes_before_reading_the_regions() {
 #[derive(Default)]
 struct EventLog(Mutex<Vec<String>>);
 
-impl crate::types::Observer for EventLog {
+impl crate::types::Observer<Warning> for EventLog {
     fn progress(&self, p: Progress) {
         let mut log = self.0.lock().unwrap();
         if matches!(p, Progress::Reading { .. }) && !log.iter().any(|e| e == "read") {
@@ -224,7 +240,7 @@ fn forced_t3_is_decided_by_the_plan() {
     let o = tempfile::tempdir().unwrap();
     let layout = crate::layout::detect(w.path()).unwrap();
     let log = EventLog::default();
-    let outcome = run_gc(
+    let outcome = gc(
         &layout,
         &options(&o.path().join("a")),
         &log,
@@ -266,7 +282,7 @@ struct Hook<F: Fn(&Progress) -> bool + Send + Sync> {
     fired: Mutex<bool>,
 }
 
-impl<F: Fn(&Progress) -> bool + Send + Sync> crate::types::Observer for Hook<F> {
+impl<F: Fn(&Progress) -> bool + Send + Sync> crate::types::Observer<Warning> for Hook<F> {
     fn progress(&self, p: Progress) {
         let mut fired = self.fired.lock().unwrap();
         if !*fired && (self.on)(&p) {
@@ -294,7 +310,7 @@ fn cancellation_during_writing_leaves_an_incomplete_output() {
         fired: Mutex::new(false),
     };
     let layout = crate::layout::detect(w.path()).unwrap();
-    let result = run_gc(&layout, &options(&out), &hook, &cancel);
+    let result = gc(&layout, &options(&out), &hook, &cancel);
     assert!(matches!(result, Err(OutputError::Cancelled)));
     assert!(!out.join(".wgc/complete.json").exists());
     assert!(!out.join(".wgc/failure.json").exists());
@@ -324,7 +340,7 @@ fn source_change_during_the_run_fails_verification() {
         fired: Mutex::new(false),
     };
     let layout = crate::layout::detect(w.path()).unwrap();
-    let result = run_gc(&layout, &options(&out), &hook, &AtomicBool::new(false));
+    let result = gc(&layout, &options(&out), &hook, &AtomicBool::new(false));
     assert!(
         matches!(&result, Err(OutputError::Verification(f)) if f.iter().any(|f| f.check == "V-6"))
     );
@@ -390,7 +406,7 @@ fn records_of_an_earlier_run_are_not_copied() {
     };
     let layout = crate::layout::detect(w.path()).unwrap();
     assert!(matches!(
-        run_gc(&layout, &options(&out), &hook, &cancel),
+        gc(&layout, &options(&out), &hook, &cancel),
         Err(OutputError::Cancelled)
     ));
     assert!(!out.join(".wgc/complete.json").exists());

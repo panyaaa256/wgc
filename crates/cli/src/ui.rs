@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use wgc_core::layout::{LayoutKind, WorldLayout};
-use wgc_core::report::{DimensionReport, LockStatus, ScanReport, TrustStatus};
-use wgc_core::types::{GuardId, Observer, Progress, Warning, short_dimension_id};
+use wgc_fs::layout::LayoutKind;
+use wgc_fs::report::{DimensionReport, DimensionTotals, LockStatus, ScanReport, TrustStatus};
+use wgc_fs::types::{GuardId, Observer, Progress, Warning, short_dimension_id};
 
 use crate::messages;
 
@@ -137,7 +137,7 @@ impl Terminal {
     }
 }
 
-impl Observer for Terminal {
+impl Observer<Warning> for Terminal {
     fn progress(&self, p: Progress) {
         if !self.show_progress {
             return;
@@ -218,89 +218,39 @@ pub struct SummaryFormat {
     pub verbose: bool,
 }
 
-/// Counts of the per-dimension lists that only `--verbose` prints.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct ListCounts {
-    pub integrity: u64,
-    pub empty_files: u64,
-    pub orphans: u64,
-    pub seams: u64,
-}
-
-impl ListCounts {
-    fn of(d: &DimensionReport) -> Self {
-        ListCounts {
-            integrity: (d.integrity.structural.len() + d.integrity.content.len()) as u64,
-            empty_files: d.empty_files.len() as u64,
-            orphans: d.orphans.entities + d.orphans.poi,
-            seams: d.boundary_warnings.len() as u64,
-        }
-    }
-
-    fn add(self, o: Self) -> Self {
-        ListCounts {
-            integrity: self.integrity + o.integrity,
-            empty_files: self.empty_files + o.empty_files,
-            orphans: self.orphans + o.orphans,
-            seams: self.seams + o.seams,
-        }
-    }
-
-    fn any(self) -> bool {
-        self != Self::default()
-    }
-}
-
 /// One row of the dimension table; the total is a row too.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct DimensionRow<'a> {
     label: &'a str,
-    before: u64,
-    chunks: u64,
-    delete: u64,
-    after: u64,
-    counts: ListCounts,
+    totals: DimensionTotals,
 }
 
 impl<'a> DimensionRow<'a> {
     fn of(d: &'a DimensionReport) -> Self {
         DimensionRow {
             label: short_dimension_id(&d.id),
-            before: d.size.region + d.size.entities + d.size.poi,
-            chunks: d.chunks.total,
-            delete: d.gc.delete,
-            after: d.gc.size_after.region + d.gc.size_after.entities + d.gc.size_after.poi,
-            counts: ListCounts::of(d),
+            totals: DimensionTotals::of(d),
         }
     }
 
     fn total(rows: &[Self]) -> Self {
-        rows.iter().fold(
-            DimensionRow {
-                label: "total",
-                ..Default::default()
-            },
-            |t, r| DimensionRow {
-                before: t.before + r.before,
-                chunks: t.chunks + r.chunks,
-                delete: t.delete + r.delete,
-                after: t.after + r.after,
-                counts: t.counts.add(r.counts),
-                ..t
-            },
-        )
+        DimensionRow {
+            label: "total",
+            totals: rows.iter().map(|r| r.totals).sum(),
+        }
     }
 
     fn wide_cells(&self) -> [String; 8] {
+        let t = &self.totals;
         [
-            bytes(self.before),
-            self.chunks.to_string(),
-            self.delete.to_string(),
-            bytes(self.after),
-            self.counts.integrity.to_string(),
-            self.counts.empty_files.to_string(),
-            self.counts.orphans.to_string(),
-            self.counts.seams.to_string(),
+            bytes(t.before),
+            t.chunks.to_string(),
+            t.delete.to_string(),
+            bytes(t.after),
+            t.lists.integrity.to_string(),
+            t.lists.empty_files.to_string(),
+            t.lists.orphans.to_string(),
+            t.lists.seams.to_string(),
         ]
     }
 }
@@ -385,7 +335,7 @@ fn wide_table(
 }
 
 fn saves(total: &DimensionRow<'_>) -> String {
-    format!("saves {}", bytes(total.before.saturating_sub(total.after)))
+    format!("saves {}", bytes(total.totals.saved()))
 }
 
 fn narrow_table(
@@ -406,18 +356,18 @@ fn narrow_table(
             out,
             "  {:<w$} {:>10}  {:>8} chunks  {:>8} to delete  -> {:>10}",
             r.label,
-            bytes(r.before),
-            r.chunks,
-            r.delete,
-            bytes(r.after)
+            bytes(r.totals.before),
+            r.totals.chunks,
+            r.totals.delete,
+            bytes(r.totals.after)
         )?;
     }
     writeln!(
         out,
         "  {} {:>10}  -> {} ({})",
         style.bold(&format!("{:<w$}", total.label)),
-        bytes(total.before),
-        bytes(total.after),
+        bytes(total.totals.before),
+        bytes(total.totals.after),
         style.bold_green(&saves(total))
     )
 }
@@ -453,19 +403,12 @@ pub fn summary(
 
     // Trust checks.
     writeln!(out, "{}", style.bold("Checks:"))?;
-    let mut stopping = Vec::new();
     for item in &r.trust {
         let status = match item.status {
             TrustStatus::Pass => style.green("pass"),
             TrustStatus::NotApplicable => "n/a".to_owned(),
-            TrustStatus::Fail => {
-                stopping.push(item.id.as_str());
-                style.red("FAIL")
-            }
-            TrustStatus::Unknown => {
-                stopping.push(item.id.as_str());
-                style.yellow("UNKNOWN")
-            }
+            TrustStatus::Fail => style.red("FAIL"),
+            TrustStatus::Unknown => style.yellow("UNKNOWN"),
         };
         let row = format!("{} {:<36} {status}", item.id, messages::check_name(item.id));
         let row = if item.status == TrustStatus::NotApplicable {
@@ -483,9 +426,7 @@ pub fn summary(
             writeln!(out, "    {}", style.dim(&messages::reason(reason)))?;
         }
     }
-    if r.lock == LockStatus::Missing {
-        stopping.push(GuardId::L1.as_str());
-    }
+    let stopping: Vec<&str> = r.stops().into_iter().map(GuardId::as_str).collect();
     if !stopping.is_empty() && kind != SummaryKind::Output {
         writeln!(
             out,
@@ -510,12 +451,12 @@ pub fn summary(
     } else {
         narrow_table(out, &rows, &total, style)?;
         if !format.verbose
-            && let Some(line) = messages::also_found(&total.counts, temp_files)
+            && let Some(line) = messages::also_found(&total.totals.lists, temp_files)
         {
             writeln!(out, "{line}")?;
         }
     }
-    if !format.verbose && (details_hidden || total.counts.any() || temp_files > 0) {
+    if !format.verbose && (details_hidden || total.totals.lists.any() || temp_files > 0) {
         writeln!(out, "{}", style.dim(messages::VERBOSE_HINT))?;
     }
 
@@ -524,18 +465,14 @@ pub fn summary(
     }
 
     // Older chunks (scan only).
-    let older: u64 = r
-        .dimensions
-        .iter()
-        .map(|d| d.chunks.older_data_version)
-        .sum();
+    let older = r.older_chunks();
     if kind == SummaryKind::Scan && older > 0 {
         writeln!(out, "{}", messages::older_chunks(older))?;
     }
 
     // Notices. `RunOfficialOptimize` is only printed with the older chunk count above.
     for n in &r.notices {
-        if *n != wgc_core::report::Notice::RunOfficialOptimize {
+        if *n != wgc_fs::report::Notice::RunOfficialOptimize {
             writeln!(out, "{} {}", style.bold("Note:"), messages::notice(*n))?;
         }
     }
@@ -674,22 +611,12 @@ pub fn swap_steps(
     Ok(())
 }
 
-/// Paths for [`swap_steps`] from a layout.
-pub fn layout_paths(layout: &WorldLayout) -> Vec<String> {
-    layout
-        .world_folders
-        .iter()
-        .map(|f| {
-            wgc_core::report::rel_path(&layout.root, f).unwrap_or_else(|_| f.display().to_string())
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use wgc_fs::report::ListCounts;
 
     #[test]
     fn byte_sizes() {
@@ -702,13 +629,15 @@ mod tests {
     fn row(label: &str, before: u64, seams: u64) -> DimensionRow<'_> {
         DimensionRow {
             label,
-            before,
-            chunks: 10,
-            delete: 4,
-            after: before / 2,
-            counts: ListCounts {
-                seams,
-                ..Default::default()
+            totals: DimensionTotals {
+                before,
+                chunks: 10,
+                delete: 4,
+                after: before / 2,
+                lists: ListCounts {
+                    seams,
+                    ..Default::default()
+                },
             },
         }
     }
@@ -717,7 +646,7 @@ mod tests {
     fn wide_table_aligns_columns_and_sums_the_total() {
         let rows = [row("overworld", 4096, 2), row("the_end", 0, 0)];
         let total = DimensionRow::total(&rows);
-        assert_eq!((total.chunks, total.counts.seams), (20, 2));
+        assert_eq!((total.totals.chunks, total.totals.lists.seams), (20, 2));
 
         let (width, lines) = wide_table(&rows, &total, Style { color: false });
         assert_eq!(lines.len(), 6);

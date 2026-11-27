@@ -205,4 +205,4 @@ Marks the output as complete (see [gc-rules.md](gc-rules.md)).
 
 - An incompatible change (removing or renaming a key, changing a value's type) bumps the number in `schema`.
 - Adding a key is a compatible change and does not bump the number. Readers ignore unknown keys.
-- Golden tests pin every document byte for byte: `scan_json_golden`, `gc_json_golden` and `lock_status_json` in `crates/core/src/report/tests.rs`, the `*_json_golden` tests in `crates/core/src/output/record.rs`, and `verify_json_golden` in `crates/cli/src/main.rs`. The examples above are excerpts from them. Changing a shape requires updating both the tests and this document ([ADR-0012](adr/0012-pin-json-output-with-golden-tests.md)).
+- Golden tests pin every document byte for byte: `scan_json_golden`, `gc_json_golden` and `lock_status_json` in `crates/fs/src/report/tests.rs`, the `*_json_golden` tests in `crates/fs/src/output/record.rs`, and `verify_json_golden` in `crates/fs/src/output/verify.rs`. The examples above are excerpts from them. Changing a shape requires updating both the tests and this document ([ADR-0012](adr/0012-pin-json-output-with-golden-tests.md)).

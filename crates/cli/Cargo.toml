@@ -1,5 +1,5 @@
 [package]
-name = "wgc"
+name = "wgc-cli"
 description = "Delete unused chunks from Minecraft Java Edition worlds"
 version.workspace = true
 edition.workspace = true
@@ -9,14 +9,17 @@ publish.workspace = true
 [[bin]]
 name = "wgc"
 path = "src/main.rs"
+# The `wgc` library has the same name; only one of them can have API docs.
+doc = false
 
 [dependencies]
-wgc-core.workspace = true
+wgc.workspace = true
+wgc-fs.workspace = true
 clap.workspace = true
 ctrlc.workspace = true
 indicatif.workspace = true
 console.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["std"] }
 serde_json.workspace = true
 
 [dev-dependencies]

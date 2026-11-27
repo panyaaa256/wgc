@@ -1,33 +1,28 @@
 //! Reports and their JSON form.
 //!
 //! The report types are separate from the plan so that the JSON schema can
-//! stay stable while the plan changes. Paths are relative to the input path
-//! with `/` separators; a path that is not UTF-8 makes the report fail.
+//! stay stable while the plan changes. Paths are named by the caller, relative
+//! to the input path with `/` separators; a path that has no such name (one
+//! that is not UTF-8) makes the report fail.
 
-use std::collections::BTreeSet;
-use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use alloc::collections::BTreeSet;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
 
 use serde::Serialize;
 
-use crate::layout::WorldLayout;
-use crate::lock::{LockError, SessionLocks};
 use crate::plan::{
-    Decision, EntryFate, FileAction, Inhabited, KeepReason, OmitReason, Plan, PlanError,
-    PlanOptions, RemoveReason, build_plan,
+    Decision, DimensionPlan, EntryFate, FileAction, Inhabited, KeepReason, OmitReason, Plan,
+    RemoveReason,
 };
 use crate::region::{ContentError, StructuralId};
-use crate::trust::{CheckStatus, TrustDetail, TrustReport, check_trust};
-use crate::types::{ChunkPos, FileKind, GuardId, Observer, UnknownReason, Warning};
+use crate::trust::{CheckStatus, TrustDetail, TrustReport};
+use crate::types::{ChunkPos, FileKind, GuardId, UnknownReason};
 
-/// Why a report could not be produced.
-#[derive(Debug, thiserror::Error)]
-pub enum ReportError {
-    #[error("path is not valid utf-8: {0}")]
-    NonUtf8Path(PathBuf),
-    #[error(transparent)]
-    Plan(#[from] PlanError),
-}
+/// A path the report has to name is not valid UTF-8.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NonUtf8Path<P>(pub P);
 
 /// State of `session.lock` while the report was made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -38,18 +33,6 @@ pub enum LockStatus {
     Missing,
     NotWritable,
     Error,
-}
-
-impl LockStatus {
-    pub fn from_result(result: &Result<SessionLocks, LockError>) -> Self {
-        match result {
-            Ok(_) => LockStatus::Acquired,
-            Err(LockError::InUse { .. } | LockError::HeldByThisProcess { .. }) => LockStatus::InUse,
-            Err(LockError::Missing { .. }) => LockStatus::Missing,
-            Err(LockError::NotWritable { .. }) => LockStatus::NotWritable,
-            Err(LockError::Io { .. }) => LockStatus::Error,
-        }
-    }
 }
 
 /// Fixed notices shown with a report.
@@ -83,14 +66,116 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
-    /// Whether `gc --out` would stop where `--force` can continue: a trust
-    /// check failed or could not be confirmed, or `session.lock` is missing (L-1).
+    /// Where `gc --out` would stop and `--force` can continue: trust checks
+    /// that failed or could not be confirmed, in check order, then L-1 when
+    /// `session.lock` is missing.
+    pub fn stops(&self) -> Vec<GuardId> {
+        let trust = self
+            .trust
+            .iter()
+            .filter(|t| matches!(t.status, TrustStatus::Fail | TrustStatus::Unknown))
+            .map(|t| t.id);
+        let lock = (self.lock == LockStatus::Missing).then_some(GuardId::L1);
+        trust.chain(lock).collect()
+    }
+
+    /// Whether `gc --out` would stop anywhere (see [`ScanReport::stops`]).
     pub fn has_stops(&self) -> bool {
-        self.lock == LockStatus::Missing
-            || self
-                .trust
-                .iter()
-                .any(|t| matches!(t.status, TrustStatus::Fail | TrustStatus::Unknown))
+        !self.stops().is_empty()
+    }
+
+    /// Chunks saved by an older game version than the world's, in all dimensions.
+    pub fn older_chunks(&self) -> u64 {
+        self.dimensions
+            .iter()
+            .map(|d| d.chunks.older_data_version)
+            .sum()
+    }
+}
+
+/// How many entries each detail list of a dimension has.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ListCounts {
+    /// Structural and content errors.
+    pub integrity: u64,
+    pub empty_files: u64,
+    /// Entity and POI entries without a chunk.
+    pub orphans: u64,
+    /// Boundary warnings: kept chunks with old terrain next to deleted ones.
+    pub seams: u64,
+}
+
+impl ListCounts {
+    pub fn any(self) -> bool {
+        self != Self::default()
+    }
+}
+
+impl core::ops::Add for ListCounts {
+    type Output = Self;
+
+    fn add(self, o: Self) -> Self {
+        ListCounts {
+            integrity: self.integrity + o.integrity,
+            empty_files: self.empty_files + o.empty_files,
+            orphans: self.orphans + o.orphans,
+            seams: self.seams + o.seams,
+        }
+    }
+}
+
+/// The figures of one dimension, or of several added up.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DimensionTotals {
+    /// Bytes of region, entities and POI files now.
+    pub before: u64,
+    pub chunks: u64,
+    /// Chunks GC deletes.
+    pub delete: u64,
+    /// Bytes of region, entities and POI files after GC.
+    pub after: u64,
+    pub lists: ListCounts,
+}
+
+impl DimensionTotals {
+    pub fn of(d: &DimensionReport) -> Self {
+        DimensionTotals {
+            before: d.size.region + d.size.entities + d.size.poi,
+            chunks: d.chunks.total,
+            delete: d.gc.delete,
+            after: d.gc.size_after.region + d.gc.size_after.entities + d.gc.size_after.poi,
+            lists: ListCounts {
+                integrity: (d.integrity.structural.len() + d.integrity.content.len()) as u64,
+                empty_files: d.empty_files.len() as u64,
+                orphans: d.orphans.entities + d.orphans.poi,
+                seams: d.boundary_warnings.len() as u64,
+            },
+        }
+    }
+
+    /// Bytes GC frees.
+    pub const fn saved(&self) -> u64 {
+        self.before.saturating_sub(self.after)
+    }
+}
+
+impl core::ops::Add for DimensionTotals {
+    type Output = Self;
+
+    fn add(self, o: Self) -> Self {
+        DimensionTotals {
+            before: self.before + o.before,
+            chunks: self.chunks + o.chunks,
+            delete: self.delete + o.delete,
+            after: self.after + o.after,
+            lists: self.lists + o.lists,
+        }
+    }
+}
+
+impl core::iter::Sum for DimensionTotals {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::default(), core::ops::Add::add)
     }
 }
 
@@ -307,44 +392,17 @@ pub struct BoundaryJson {
     pub max: [i32; 2],
 }
 
-/// Locks the world for a read-only report if possible; otherwise warns
-/// ([`Warning::LockUnavailable`]) and continues. Keep the returned locks alive while reading.
-pub fn try_lock_for_report(
-    layout: &WorldLayout,
-    observer: &dyn Observer,
-) -> (LockStatus, Option<SessionLocks>) {
-    let locks = SessionLocks::try_acquire_all(layout);
-    let lock = LockStatus::from_result(&locks);
-    match locks {
-        Ok(held) => (lock, Some(held)),
-        Err(e) => {
-            observer.warn(Warning::LockUnavailable(e));
-            (lock, None)
-        }
-    }
-}
-
-/// Runs `wgc scan`: locks if possible, plans every dimension and checks trust.
-pub fn run_scan(
-    layout: &WorldLayout,
-    observer: &dyn Observer,
-    cancel: &AtomicBool,
-) -> Result<ScanReport, ReportError> {
-    let (lock, _held) = try_lock_for_report(layout, observer);
-    let plan = build_plan(layout, &PlanOptions::default(), observer, cancel)?;
-    let trust = check_trust(&plan);
-    scan_report(&plan, &trust, lock)
-}
-
 /// Builds the scan report for a plan made without `--dimension`.
-pub fn scan_report(
-    plan: &Plan,
-    trust: &TrustReport,
+///
+/// `name` gives the name of a path in the report.
+pub fn scan_report<P: Clone>(
+    plan: &Plan<P>,
+    trust: &TrustReport<P>,
     lock: LockStatus,
-) -> Result<ScanReport, ReportError> {
-    let root = &plan.layout.root;
-    let rel = |p: &Path| rel_path(root, p);
-    let rels = |ps: &[PathBuf]| ps.iter().map(|p| rel(p)).collect::<Result<Vec<_>, _>>();
+    name: impl Fn(&P) -> Option<String>,
+) -> Result<ScanReport, NonUtf8Path<P>> {
+    let rel = |p: &P| name(p).ok_or_else(|| NonUtf8Path(p.clone()));
+    let rels = |ps: &[P]| ps.iter().map(rel).collect::<Result<Vec<_>, _>>();
 
     let mut dimensions = Vec::new();
     let mut any_deleted = false;
@@ -389,7 +447,7 @@ pub fn scan_report(
                         reason: omit_reason(o.reason),
                     })
                 })
-                .collect::<Result<_, ReportError>>()?,
+                .collect::<Result<_, NonUtf8Path<P>>>()?,
             dat_old_without_dat: rels(&plan.dat_old_without_dat)?,
         },
         notices,
@@ -397,11 +455,11 @@ pub fn scan_report(
     })
 }
 
-fn dimension_report(
-    plan: &Plan,
-    dim: &crate::plan::DimensionPlan,
-    rel: &dyn Fn(&Path) -> Result<String, ReportError>,
-) -> Result<DimensionReport, ReportError> {
+fn dimension_report<P>(
+    plan: &Plan<P>,
+    dim: &DimensionPlan<P>,
+    rel: &dyn Fn(&P) -> Result<String, NonUtf8Path<P>>,
+) -> Result<DimensionReport, NonUtf8Path<P>> {
     let world_version = plan.layout.data_version;
     let sizes = plan
         .estimate
@@ -434,12 +492,16 @@ fn dimension_report(
             integrity.verbatim_triples.push([t.pos.x, t.pos.z]);
         }
         for issue in &t.issues {
-            let path = &t
-                .file(issue.kind)
-                .expect("a structural issue belongs to a file of the triple")
-                .path;
+            let file = t.file(issue.kind);
+            debug_assert!(
+                file.is_some(),
+                "a structural issue belongs to a file of its triple"
+            );
+            let Some(file) = file else {
+                continue;
+            };
             integrity.structural.push(StructuralJson {
-                path: rel(path)?,
+                path: rel(&file.path)?,
                 id: issue.id,
                 index: issue.index.map(|i| i.get()),
             });
@@ -524,30 +586,20 @@ fn dimension_report(
 
 /// Turns a scan report into the `wgc gc` report.
 ///
-/// Pass `out` only after the output was written and verified: the report
-/// then says `output` and carries the `no_trash` notice. `out` is
-/// canonicalized (made absolute if it cannot be resolved).
-pub fn gc_report(
+/// Pass `out`, the absolute path of the output, only after the output was
+/// written and verified: the report then says `output` and carries the
+/// `no_trash` notice.
+pub fn gc_report<P>(
     mut scan: ScanReport,
-    out: Option<&Path>,
+    out: Option<String>,
     forced: &BTreeSet<GuardId>,
-    plan: &Plan,
-) -> Result<GcReport, ReportError> {
+    plan: &Plan<P>,
+) -> GcReport {
     scan.schema = "wgc.gc/1";
-    let out = out
-        .map(|p| {
-            let full = std::fs::canonicalize(p)
-                .or_else(|_| std::path::absolute(p))
-                .unwrap_or_else(|_| p.to_path_buf());
-            full.to_str()
-                .map(str::to_owned)
-                .ok_or(ReportError::NonUtf8Path(full.clone()))
-        })
-        .transpose()?;
     if out.is_some() {
         scan.notices.push(Notice::NoTrash);
     }
-    Ok(GcReport {
+    GcReport {
         scan,
         mode: if out.is_some() {
             GcMode::Output
@@ -560,7 +612,7 @@ pub fn gc_report(
             .gc_dims
             .as_ref()
             .map(|dims| dims.iter().map(ToString::to_string).collect()),
-    })
+    }
 }
 
 fn pos(p: ChunkPos) -> [i32; 2] {
@@ -575,11 +627,11 @@ fn omit_reason(r: OmitReason) -> OmitJson {
     }
 }
 
-fn trust_item(
+fn trust_item<P>(
     id: GuardId,
-    status: &CheckStatus,
-    rel: &dyn Fn(&Path) -> Result<String, ReportError>,
-) -> Result<TrustItem, ReportError> {
+    status: &CheckStatus<P>,
+    rel: &dyn Fn(&P) -> Result<String, NonUtf8Path<P>>,
+) -> Result<TrustItem, NonUtf8Path<P>> {
     let (name, details, reason) = match status {
         CheckStatus::Pass => (TrustStatus::Pass, Vec::new(), None),
         CheckStatus::NotApplicable => (TrustStatus::NotApplicable, Vec::new(), None),
@@ -611,7 +663,7 @@ fn trust_item(
                         },
                     })
                 })
-                .collect::<Result<_, ReportError>>()?,
+                .collect::<Result<_, NonUtf8Path<P>>>()?,
             None,
         ),
         CheckStatus::Unknown(reason) => (
@@ -642,29 +694,3 @@ fn trust_item(
         reason,
     })
 }
-
-/// `path` relative to `root`, with `/` separators. `root` itself is `"."`.
-/// Paths outside `root` (e.g. the server defaults of a world folder input)
-/// are given as they are.
-pub fn rel_path(root: &Path, path: &Path) -> Result<String, ReportError> {
-    let non_utf8 = || ReportError::NonUtf8Path(path.to_path_buf());
-    let Ok(relative) = path.strip_prefix(root) else {
-        return path.to_str().map(str::to_owned).ok_or_else(non_utf8);
-    };
-    let mut parts = Vec::new();
-    for component in relative.components() {
-        match component {
-            Component::Normal(s) => parts.push(s.to_str().ok_or_else(non_utf8)?),
-            Component::CurDir => {}
-            // A path relative to root has no prefix, root or parent components.
-            other => parts.push(other.as_os_str().to_str().ok_or_else(non_utf8)?),
-        }
-    }
-    if parts.is_empty() {
-        return Ok(".".to_owned());
-    }
-    Ok(parts.join("/"))
-}
-
-#[cfg(test)]
-mod tests;

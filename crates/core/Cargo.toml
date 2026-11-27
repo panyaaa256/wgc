@@ -1,6 +1,6 @@
 [package]
 name = "wgc-core"
-description = "Analysis and processing for wgc, the Minecraft world chunk GC"
+description = "Pure world data handling for wgc, the Minecraft world chunk GC"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,20 +8,18 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
-flate2.workspace = true
+miniz_oxide.workspace = true
+crc32fast.workspace = true
 lz4_flex.workspace = true
 xxhash-rust.workspace = true
 nanonbt.workspace = true
-rayon.workspace = true
-yaml-rust2.workspace = true
 serde.workspace = true
-serde_json.workspace = true
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
 
 [dev-dependencies]
-tempfile.workspace = true
+flate2.workspace = true
+
+[features]
+# On a host with std: pick the fastest CRC-32 code for the CPU at run time.
+std = ["crc32fast/std"]
+# Builders for synthetic region files and NBT, for the tests of dependent crates.
+test-util = []

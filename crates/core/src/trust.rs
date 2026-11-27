@@ -8,15 +8,15 @@
 //! Files that cannot be read never fail the check run; they make the check
 //! "unknown" instead.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::{Path, PathBuf};
-
-use yaml_rust2::{Yaml, YamlLoader};
+use alloc::borrow::ToOwned;
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use crate::layout::{self, Dimension, LayoutKind, WorldLayout};
 use crate::nbt::{self, PlayerDimension, PlayerSummary};
-use crate::plan::{Inhabited, Plan, PlanError, is_targeted, read_inhabited};
+use crate::plan::{Inhabited, Plan, is_targeted};
+use crate::source::{Config, WorldSource};
 use crate::types::{ChunkPos, DimensionId, GuardId, Known, UnknownReason};
 use crate::versions::{DV_1_21_5, DV_FILES_26_1, DV_MAX_KNOWN};
 
@@ -24,11 +24,11 @@ use crate::versions::{DV_1_21_5, DV_FILES_26_1, DV_MAX_KNOWN};
 /// [`check_trust_before_plan`] was told to skip it). Each check is described
 /// on its [`GuardId`] variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrustReport {
-    pub checks: Vec<CheckResult>,
+pub struct TrustReport<P> {
+    pub checks: Vec<CheckResult<P>>,
 }
 
-impl TrustReport {
+impl<P> TrustReport<P> {
     /// Checks that failed or could not be confirmed: these stop `gc --out`.
     pub fn stops(&self) -> BTreeSet<GuardId> {
         self.checks
@@ -40,29 +40,29 @@ impl TrustReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CheckResult {
+pub struct CheckResult<P> {
     pub id: GuardId,
-    pub status: CheckStatus,
+    pub status: CheckStatus<P>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CheckStatus {
+pub enum CheckStatus<P> {
     Pass,
-    Fail(Vec<TrustDetail>),
-    Unknown(UnknownReason),
+    Fail(Vec<TrustDetail<P>>),
+    Unknown(UnknownReason<P>),
     NotApplicable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TrustDetail {
+pub enum TrustDetail<P> {
     PaperFixedInhabitedTime {
-        file: PathBuf,
+        file: P,
         value: i64,
     },
     /// `world_folder` is the folder whose game rules disable spawning (a
     /// dimension folder on Bukkit 26.1 and later).
     MobSpawningDisabled {
-        world_folder: PathBuf,
+        world_folder: P,
     },
     PlayerInZeroChunk {
         uuid: String,
@@ -72,8 +72,9 @@ pub enum TrustDetail {
 }
 
 /// Runs T-1..T-5 against a plan.
-pub fn check_trust(plan: &Plan) -> TrustReport {
+pub fn check_trust<S: WorldSource>(source: &S, plan: &Plan<S::Path>) -> TrustReport<S::Path> {
     run_checks(
+        source,
         &plan.layout,
         plan.gc_dims.as_ref(),
         plan.protection_unknown.clone(),
@@ -82,58 +83,63 @@ pub fn check_trust(plan: &Plan) -> TrustReport {
 }
 
 /// Runs T-1..T-5 without a plan, so that `gc --out` can stop before reading
-/// every region file. T-3 reads only the region files that hold the chunks
-/// players stand in, and T-5 reads the forced chunks directly.
+/// every region file. T-5 reads the forced chunks directly, and T-3 looks up
+/// the chunks players stand in through `inhabited_of`, which returns the
+/// InhabitedTime of the chunks that exist.
 ///
-/// With `skip_t3`, T-3 reads nothing and is left out of the report: when
-/// `--force` allows it, it cannot stop the run, and the check against the plan
-/// decides whether it was forced.
-pub fn check_trust_before_plan(
-    layout: &WorldLayout,
+/// Without `inhabited_of`, T-3 reads nothing and is left out of the report:
+/// when `--force` allows it, it cannot stop the run, and the check against the
+/// plan decides whether it was forced.
+pub fn check_trust_before_plan<S: WorldSource>(
+    source: &S,
+    layout: &WorldLayout<S::Path>,
     gc_dims: Option<&BTreeSet<DimensionId>>,
-    skip_t3: bool,
-) -> TrustReport {
+    inhabited_of: Option<
+        impl FnOnce(&BTreeSet<ChunkKey>) -> Result<InhabitedMap, UnknownReason<S::Path>>,
+    >,
+) -> TrustReport<S::Path> {
     let protection_unknown = layout
         .dimensions
         .iter()
         .filter(|d| is_targeted(gc_dims, &d.id))
-        .filter(|d| matches!(layout::forced_chunks(layout, d), Known::Unknown(_)))
+        .filter(|d| matches!(layout::forced_chunks(source, layout, d), Known::Unknown(_)))
         .map(|d| d.id.clone())
         .collect();
-    let inhabited_of =
-        (!skip_t3).then_some(|wanted: &BTreeSet<ChunkKey>| read_inhabited_of(layout, wanted));
-    run_checks(layout, gc_dims, protection_unknown, inhabited_of)
+    run_checks(source, layout, gc_dims, protection_unknown, inhabited_of)
 }
 
 /// A chunk in a dimension.
-type ChunkKey = (DimensionId, ChunkPos);
+pub type ChunkKey = (DimensionId, ChunkPos);
 
 /// The InhabitedTime of the chunks T-3 looks up; chunks that do not exist are left out.
-type InhabitedMap = BTreeMap<ChunkKey, Inhabited>;
+pub type InhabitedMap = BTreeMap<ChunkKey, Inhabited>;
 
-fn run_checks(
-    layout: &WorldLayout,
+fn run_checks<S: WorldSource>(
+    source: &S,
+    layout: &WorldLayout<S::Path>,
     gc_dims: Option<&BTreeSet<DimensionId>>,
     protection_unknown: BTreeSet<DimensionId>,
-    inhabited_of: Option<impl FnOnce(&BTreeSet<ChunkKey>) -> Result<InhabitedMap, UnknownReason>>,
-) -> TrustReport {
-    let targeted: Vec<&Dimension> = layout
+    inhabited_of: Option<
+        impl FnOnce(&BTreeSet<ChunkKey>) -> Result<InhabitedMap, UnknownReason<S::Path>>,
+    >,
+) -> TrustReport<S::Path> {
+    let targeted: Vec<&Dimension<S::Path>> = layout
         .dimensions
         .iter()
         .filter(|d| is_targeted(gc_dims, &d.id))
         .collect();
     let t3 = inhabited_of.map(|inhabited_of| CheckResult {
         id: GuardId::T3,
-        status: player_positions(layout, gc_dims, inhabited_of),
+        status: player_positions(source, layout, gc_dims, inhabited_of),
     });
     let checks = [
         Some(CheckResult {
             id: GuardId::T1,
-            status: paper_config(layout, &targeted),
+            status: paper_config(source, layout, &targeted),
         }),
         Some(CheckResult {
             id: GuardId::T2,
-            status: mob_spawning(layout, &targeted),
+            status: mob_spawning(source, layout, &targeted),
         }),
         t3,
         Some(CheckResult {
@@ -150,7 +156,7 @@ fn run_checks(
     }
 }
 
-fn from_details(details: Vec<TrustDetail>) -> CheckStatus {
+fn from_details<P>(details: Vec<TrustDetail<P>>) -> CheckStatus<P> {
     if details.is_empty() {
         CheckStatus::Pass
     } else {
@@ -170,38 +176,34 @@ enum FixedTime {
     On(i64),
 }
 
-/// Parses a YAML file; `Ok(None)` if it does not exist. An empty file is `Null`.
-fn load_yaml(path: &Path) -> Result<Option<Yaml>, UnknownReason> {
-    let unreadable = || UnknownReason::UnreadableFile {
-        path: path.to_path_buf(),
-    };
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(unreadable()),
-    };
-    let docs = YamlLoader::load_from_str(&text).map_err(|_| unreadable())?;
-    Ok(Some(docs.into_iter().next().unwrap_or(Yaml::Null)))
+/// Reads a configuration file; `Ok(None)` if it does not exist.
+fn load_config<S: WorldSource>(
+    source: &S,
+    path: &S::Path,
+) -> Result<Option<Config>, UnknownReason<S::Path>> {
+    source
+        .read_config(path)
+        .map_err(|_| UnknownReason::UnreadableFile { path: path.clone() })
 }
 
 /// Looks up `keys` under `doc`. A missing key is `Ok(None)`; a node on the way
 /// that is neither a mapping nor null is an unexpected value.
-fn lookup<'a>(
-    doc: &'a Yaml,
+fn lookup<'a, P: Clone>(
+    doc: &'a Config,
     keys: &[&str],
-    path: &Path,
-) -> Result<Option<&'a Yaml>, UnknownReason> {
+    path: &P,
+) -> Result<Option<&'a Config>, UnknownReason<P>> {
     let mut node = doc;
     for key in keys {
         match node {
-            Yaml::Hash(map) => match map.get(&Yaml::String((*key).to_owned())) {
+            Config::Map(map) => match map.get(*key) {
                 Some(next) => node = next,
                 None => return Ok(None),
             },
-            Yaml::Null => return Ok(None),
+            Config::Null => return Ok(None),
             _ => {
                 return Err(UnknownReason::UnexpectedValue {
-                    path: path.to_path_buf(),
+                    path: path.clone(),
                     key: keys.join("."),
                 });
             }
@@ -210,27 +212,30 @@ fn lookup<'a>(
     Ok(Some(node))
 }
 
-fn fixed_time(
-    value: Option<&Yaml>,
+fn fixed_time<P: Clone>(
+    value: Option<&Config>,
     keys: &[&str],
-    path: &Path,
-) -> Result<FixedTime, UnknownReason> {
+    path: &P,
+) -> Result<FixedTime, UnknownReason<P>> {
     match value {
-        None | Some(Yaml::Null) => Ok(FixedTime::Inherit),
-        Some(Yaml::String(s)) if s == "default" => Ok(FixedTime::Inherit),
-        Some(Yaml::Integer(v)) if *v >= 0 => Ok(FixedTime::On(*v)),
-        Some(Yaml::Integer(_)) => Ok(FixedTime::Off),
+        None | Some(Config::Null) => Ok(FixedTime::Inherit),
+        Some(Config::String(s)) if s == "default" => Ok(FixedTime::Inherit),
+        Some(Config::Integer(v)) if *v >= 0 => Ok(FixedTime::On(*v)),
+        Some(Config::Integer(_)) => Ok(FixedTime::Off),
         Some(_) => Err(UnknownReason::UnexpectedValue {
-            path: path.to_path_buf(),
+            path: path.clone(),
             key: keys.join("."),
         }),
     }
 }
 
 /// The setting in a Paper 1.19+ file (`paper-world.yml`, `paper-world-defaults.yml`).
-fn read_modern(path: &Path) -> Result<FixedTime, UnknownReason> {
+fn read_modern<S: WorldSource>(
+    source: &S,
+    path: &S::Path,
+) -> Result<FixedTime, UnknownReason<S::Path>> {
     const KEYS: [&str; 2] = ["chunks", "fixed-chunk-inhabited-time"];
-    match load_yaml(path)? {
+    match load_config(source, path)? {
         None => Ok(FixedTime::Inherit),
         Some(doc) => fixed_time(lookup(&doc, &KEYS, path)?, &KEYS, path),
     }
@@ -241,7 +246,11 @@ fn read_modern(path: &Path) -> Result<FixedTime, UnknownReason> {
 /// every chunk's InhabitedTime to that value. A per-world value overrides the
 /// server default; `default`, a missing key or a missing file inherit it; a
 /// negative value turns the feature off.
-fn paper_config(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
+fn paper_config<S: WorldSource>(
+    source: &S,
+    layout: &WorldLayout<S::Path>,
+    targeted: &[&Dimension<S::Path>],
+) -> CheckStatus<S::Path> {
     let Some(server_root) = layout
         .server_root
         .as_ref()
@@ -250,18 +259,15 @@ fn paper_config(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
         return CheckStatus::NotApplicable;
     };
     let result = (|| {
-        let defaults = server_root.join("config/paper-world-defaults.yml");
-        let legacy = server_root.join("paper.yml");
+        let defaults = source.join(server_root, "config/paper-world-defaults.yml");
+        let legacy = source.join(server_root, "paper.yml");
         let mut details = BTreeSet::new();
         // Paper 1.19 moved paper.yml to config/; paper.yml alone means an older Paper.
-        if !defaults.exists() && legacy.exists() {
-            let doc = load_yaml(&legacy)?.unwrap_or(Yaml::Null);
-            let folders: BTreeSet<&PathBuf> = targeted.iter().map(|d| &d.world_folder).collect();
+        if !source.exists(&defaults) && source.exists(&legacy) {
+            let doc = load_config(source, &legacy)?.unwrap_or(Config::Null);
+            let folders: BTreeSet<&S::Path> = targeted.iter().map(|d| &d.world_folder).collect();
             for folder in folders {
-                let world = folder
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default();
+                let world = source.name(folder).unwrap_or_default();
                 let own = ["world-settings", world, "fixed-chunk-inhabited-time"];
                 let default = ["world-settings", "default", "fixed-chunk-inhabited-time"];
                 let time = match fixed_time(lookup(&doc, &own, &legacy)?, &own, &legacy)? {
@@ -280,13 +286,13 @@ fn paper_config(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
             return Ok(details);
         }
 
-        let default_time = read_modern(&defaults)?;
-        let world_files: BTreeSet<PathBuf> = targeted
+        let default_time = read_modern(source, &defaults)?;
+        let world_files: BTreeSet<S::Path> = targeted
             .iter()
-            .filter_map(|d| layout::paper_world_config(layout, d))
+            .filter_map(|d| layout::paper_world_config(source, layout, d))
             .collect();
         for file in &world_files {
-            let found = match read_modern(file)? {
+            let found = match read_modern(source, file)? {
                 FixedTime::Inherit => match default_time {
                     FixedTime::On(value) => Some((value, defaults.clone())),
                     _ => None,
@@ -312,7 +318,11 @@ fn paper_config(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
 /// rule is off for a world that holds a targeted dimension, because Paper then
 /// stops advancing InhabitedTime (PaperMC/Paper#12827). Other Bukkit servers
 /// are not affected, but the files cannot tell them apart.
-fn mob_spawning(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
+fn mob_spawning<S: WorldSource>(
+    source: &S,
+    layout: &WorldLayout<S::Path>,
+    targeted: &[&Dimension<S::Path>],
+) -> CheckStatus<S::Path> {
     let affected = layout.data_version.is_some_and(|v| v >= DV_1_21_5);
     if !layout.kind.is_bukkit() || !affected {
         return CheckStatus::NotApplicable;
@@ -320,7 +330,7 @@ fn mob_spawning(layout: &WorldLayout, targeted: &[&Dimension]) -> CheckStatus {
     let mut details = BTreeSet::new();
     let mut unknown = None;
     for dim in targeted {
-        match layout::spawn_mobs(layout, dim) {
+        match layout::spawn_mobs(source, layout, dim) {
             Known::Value(true) => {}
             Known::Value(false) => {
                 let folder = match layout.kind {
@@ -350,39 +360,36 @@ const SPECTATOR: i32 = 3;
 
 /// Reads every player: the player data folder and, before 26.1, the
 /// singleplayer host in `level.dat`. Unreadable sources are an error.
-fn read_players(layout: &WorldLayout) -> Result<Vec<(String, PlayerSummary)>, UnknownReason> {
-    let unreadable = |path: &Path| UnknownReason::UnreadableFile {
-        path: path.to_path_buf(),
-    };
+fn read_players<S: WorldSource>(
+    source: &S,
+    layout: &WorldLayout<S::Path>,
+) -> Result<Vec<(String, PlayerSummary)>, UnknownReason<S::Path>> {
+    let unreadable = |path: &S::Path| UnknownReason::UnreadableFile { path: path.clone() };
     let mut players = Vec::new();
-    let dir = layout::player_data_dir(layout);
-    let mut files = Vec::new();
-    match fs::read_dir(&dir) {
-        Ok(entries) => {
-            for entry in entries {
-                files.push(entry.map_err(|_| unreadable(&dir))?.path());
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err(unreadable(&dir)),
-    }
+    let dir = layout::player_data_dir(source, layout);
+    let mut files: Vec<S::Path> = source
+        .list(&dir)
+        .map_err(|_| unreadable(&dir))?
+        .into_iter()
+        .map(|entry| entry.path)
+        .collect();
     files.sort();
     for path in files {
-        let Some(stem) = path
-            .file_name()
-            .and_then(|n| n.to_str())
+        let Some(stem) = source
+            .name(&path)
             .and_then(|n| n.strip_suffix(".dat"))
             .filter(|stem| is_uuid(stem))
         else {
             continue;
         };
-        let player = read_gzip(&path, nbt::read_player).ok_or_else(|| unreadable(&path))?;
+        let player = read_gzip(source, &path, nbt::read_player).ok_or_else(|| unreadable(&path))?;
         players.push((stem.to_owned(), player));
     }
 
     if layout.data_version.is_none_or(|v| v < DV_FILES_26_1) {
-        let level = layout.main_world_folder.join("level.dat");
-        let host = read_gzip(&level, nbt::read_level_player).ok_or_else(|| unreadable(&level))?;
+        let level = source.join(&layout.main_world_folder, "level.dat");
+        let host =
+            read_gzip(source, &level, nbt::read_level_player).ok_or_else(|| unreadable(&level))?;
         // The host usually also has a player file; do not count them twice.
         if let Some(host) = host
             && !players
@@ -416,12 +423,13 @@ fn player_chunk(player: &PlayerSummary) -> Option<ChunkKey> {
 /// Players whose position cannot be read, whose chunk does not exist, or
 /// whose chunk has no plain InhabitedTime value are skipped; if no player is
 /// left to check, the result is unknown.
-fn player_positions(
-    layout: &WorldLayout,
+fn player_positions<S: WorldSource>(
+    source: &S,
+    layout: &WorldLayout<S::Path>,
     gc_dims: Option<&BTreeSet<DimensionId>>,
-    inhabited_of: impl FnOnce(&BTreeSet<ChunkKey>) -> Result<InhabitedMap, UnknownReason>,
-) -> CheckStatus {
-    let players = match read_players(layout) {
+    inhabited_of: impl FnOnce(&BTreeSet<ChunkKey>) -> Result<InhabitedMap, UnknownReason<S::Path>>,
+) -> CheckStatus<S::Path> {
+    let players = match read_players(source, layout) {
         Ok(players) => players,
         Err(reason) => return CheckStatus::Unknown(reason),
     };
@@ -460,7 +468,7 @@ fn player_positions(
     from_details(details)
 }
 
-fn inhabited_in_plan(plan: &Plan, wanted: &BTreeSet<ChunkKey>) -> InhabitedMap {
+fn inhabited_in_plan<P>(plan: &Plan<P>, wanted: &BTreeSet<ChunkKey>) -> InhabitedMap {
     let mut found = BTreeMap::new();
     for dim in &plan.dimensions {
         for t in &dim.triples {
@@ -475,40 +483,30 @@ fn inhabited_in_plan(plan: &Plan, wanted: &BTreeSet<ChunkKey>) -> InhabitedMap {
     found
 }
 
-/// Reads the chunks from the region files, one dimension at a time.
-fn read_inhabited_of(
-    layout: &WorldLayout,
-    wanted: &BTreeSet<ChunkKey>,
-) -> Result<InhabitedMap, UnknownReason> {
-    let mut found = BTreeMap::new();
-    for dim in &layout.dimensions {
-        let chunks: BTreeSet<ChunkPos> = wanted
-            .iter()
-            .filter(|(id, _)| *id == dim.id)
-            .map(|(_, pos)| *pos)
-            .collect();
-        let inhabited =
-            read_inhabited(dim, &chunks).map_err(|e| UnknownReason::UnreadableFile {
-                path: match e {
-                    PlanError::Io { path, .. } => path,
-                    _ => dim.dir.clone(),
-                },
-            })?;
-        found.extend(
-            inhabited
-                .into_iter()
-                .map(|(pos, inhabited)| ((dim.id.clone(), pos), inhabited)),
-        );
-    }
-    Ok(found)
+/// The chunk that holds a block coordinate, if it is a finite value inside
+/// the range of chunk coordinates.
+fn block_to_chunk(x: f64, z: f64) -> Option<ChunkPos> {
+    Some(ChunkPos::new(
+        floor_to_i32(x / 16.0)?,
+        floor_to_i32(z / 16.0)?,
+    ))
 }
 
-fn block_to_chunk(x: f64, z: f64) -> Option<ChunkPos> {
-    let to_chunk = |v: f64| {
-        let c = (v / 16.0).floor();
-        (c.is_finite() && c >= f64::from(i32::MIN) && c <= f64::from(i32::MAX)).then_some(c as i32)
+/// `v` rounded towards negative infinity, if that fits an `i32`.
+fn floor_to_i32(v: f64) -> Option<i32> {
+    // floor(v) is in i32's range exactly when v is in [MIN, MAX + 1); NaN fails both.
+    if !(v >= f64::from(i32::MIN) && v < f64::from(i32::MAX) + 1.0) {
+        return None;
+    }
+    // In range, `as` truncates towards zero; negative values with a
+    // fractional part need one less.
+    let truncated = v as i64;
+    let floor = if (truncated as f64) > v {
+        truncated - 1
+    } else {
+        truncated
     };
-    Some(ChunkPos::new(to_chunk(x)?, to_chunk(z)?))
+    i32::try_from(floor).ok()
 }
 
 fn is_uuid(s: &str) -> bool {
@@ -519,8 +517,12 @@ fn is_uuid(s: &str) -> bool {
         })
 }
 
-fn read_gzip<T>(path: &Path, parse: impl FnOnce(&[u8]) -> Result<T, nbt::NbtError>) -> Option<T> {
-    let bytes = fs::read(path).ok()?;
+fn read_gzip<S: WorldSource, T>(
+    source: &S,
+    path: &S::Path,
+    parse: impl FnOnce(&[u8]) -> Result<T, nbt::NbtError>,
+) -> Option<T> {
+    let bytes = source.read(path).ok()?;
     let nbt = nbt::gunzip(&bytes).ok()?;
     parse(&nbt).ok()
 }
@@ -529,7 +531,7 @@ fn read_gzip<T>(path: &Path, parse: impl FnOnce(&[u8]) -> Result<T, nbt::NbtErro
 
 /// T-4: unknown when the world's DataVersion is newer than any version wgc
 /// knows, since its InhabitedTime behavior has not been checked.
-fn version(layout: &WorldLayout) -> CheckStatus {
+fn version<P>(layout: &WorldLayout<P>) -> CheckStatus<P> {
     match layout.data_version {
         Some(v) if v > DV_MAX_KNOWN => CheckStatus::Unknown(UnknownReason::UnknownVersion(v)),
         _ => CheckStatus::Pass,
@@ -538,10 +540,10 @@ fn version(layout: &WorldLayout) -> CheckStatus {
 
 /// T-5: unknown when the forced chunks of a targeted dimension could not be
 /// read, so chunks around them cannot be protected from deletion.
-fn forced_chunks(
+fn forced_chunks<P>(
     gc_dims: Option<&BTreeSet<DimensionId>>,
     mut unknown: BTreeSet<DimensionId>,
-) -> CheckStatus {
+) -> CheckStatus<P> {
     unknown.retain(|id| is_targeted(gc_dims, id));
     if unknown.is_empty() {
         CheckStatus::Pass
@@ -551,4 +553,31 @@ fn forced_chunks(
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_to_chunk_floors() {
+        assert_eq!(block_to_chunk(-0.5, 15.9), Some(ChunkPos::new(-1, 0)));
+        assert_eq!(block_to_chunk(16.0, -16.0), Some(ChunkPos::new(1, -1)));
+        assert_eq!(block_to_chunk(f64::NAN, 0.0), None);
+    }
+
+    #[test]
+    fn floor_to_i32_matches_floor() {
+        for v in [
+            0.0, -0.0, 0.5, -0.5, 1.0, -1.0, 15.9, -16.0, -16.1, 1e9, -1e9,
+        ] {
+            assert_eq!(floor_to_i32(v), Some(v.floor() as i32), "{v}");
+        }
+        let max = f64::from(i32::MAX);
+        let min = f64::from(i32::MIN);
+        assert_eq!(floor_to_i32(max + 0.5), Some(i32::MAX));
+        assert_eq!(floor_to_i32(max + 1.0), None);
+        assert_eq!(floor_to_i32(min), Some(i32::MIN));
+        assert_eq!(floor_to_i32(min - 0.5), None);
+        for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(floor_to_i32(v), None);
+        }
+    }
+}

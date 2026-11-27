@@ -32,7 +32,7 @@ The code must be readable without opening the documents.
 
 # Code Generation Directives
 
-- Respect crate boundaries inside `crates/*` and adhere strictly to the unidirectional dependency flow defined in `ARCHITECTURE.md` (`cli` -> `core`).
+- Respect crate boundaries inside `crates/*` and adhere strictly to the unidirectional dependency flow defined in `ARCHITECTURE.md` (`cli` -> `fs` -> `wgc` -> `core`).
 - Never use `unwrap()`, `expect()`, or `panic!` in non-test library code.
 - Write code comments, rustdoc, commit messages, and all documentation in English. `README_ja.md` is the only exception: a Japanese translation of `README.md`, kept in sync with it.
 
@@ -40,7 +40,7 @@ The code must be readable without opening the documents.
 
 - Write commit messages in the [Conventional Commits](https://www.conventionalcommits.org/) format: `<type>[optional scope]: <description>`.
   - **Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
-  - **Scope**: the affected area, such as a crate or module (`core`, `cli`, `region`, `output`, `docs`).
+  - **Scope**: the affected area, such as a crate or module (`core`, `wgc`, `fs`, `cli`, `region`, `output`, `docs`).
   - **Description**: imperative mood, present tense, under 72 characters.
   - Mark a breaking change with `!` after the type or scope, or with a `BREAKING CHANGE:` footer.
 - Keep one logical change per commit.

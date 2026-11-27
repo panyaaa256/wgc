@@ -7,8 +7,9 @@ the invariants it keeps. Behavior is defined by
 
 ## Workspace
 
-- A virtual manifest with two crates: `crates/core` (`wgc-core`, library) and
-  `crates/cli` (`wgc`, binary). Neither is published.
+- A virtual manifest with four crates: `crates/core` (`wgc-core`, library),
+  `crates/wgc` (`wgc`, library), `crates/fs` (`wgc-fs`, library) and
+  `crates/cli` (`wgc-cli`, the `wgc` binary). None is published.
 - The toolchain is pinned in `rust-toolchain.toml` (with rustfmt, clippy and
   rust-analyzer). No MSRV is declared.
 - Dependency versions are declared once in `[workspace.dependencies]`.
@@ -24,6 +25,7 @@ CI runs the following; run them locally before opening a pull request:
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p wgc-core -p wgc --target thumbv7em-none-eabihf -- -D warnings   # no_std
 cargo nextest run --workspace        # or: cargo test --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo deny check
@@ -33,7 +35,8 @@ typos
 
 ## Code
 
-- `cli` depends on `core`, never the reverse. `core` never prints; see
+- Dependencies point `cli` → `fs` → `wgc` → `core`, never the reverse. Only
+  `cli` prints, and `core` and `wgc` are `no_std`; see
   [`ARCHITECTURE.md`](ARCHITECTURE.md#invariants).
 - No `unwrap()`, `expect()` or `panic!` in non-test code.
 - Comments explain what the code cannot: invariants, non-obvious choices,
@@ -70,7 +73,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 - Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`,
   `ci`, `chore`, `revert`.
-- Scope: the affected area, such as `core`, `cli`, `region`, `output`.
+- Scope: the affected area, such as `core`, `wgc`, `fs`, `cli`, `region`, `output`.
 - Description: imperative mood, present tense, under 72 characters.
 - Mark breaking changes with `!` or a `BREAKING CHANGE:` footer.
 - One logical change per commit.

@@ -17,10 +17,10 @@ use crate::types::{ChunkPos, FileKind, Observer, Progress, Warning};
 
 /// How each source file was written.
 #[derive(Debug, Default)]
-pub(crate) struct Written {
+pub struct Written {
     /// Destination of every file written, with the source and whether it was rewritten.
-    pub files: BTreeMap<PathBuf, WrittenFile>,
-    pub owner_not_preserved: bool,
+    pub(crate) files: BTreeMap<PathBuf, WrittenFile>,
+    pub(crate) owner_not_preserved: bool,
 }
 
 #[derive(Debug)]
@@ -47,7 +47,7 @@ pub(crate) fn write_output(
     plan: &Plan,
     walked: &WorldFiles,
     out: &Path,
-    observer: &dyn Observer,
+    observer: &dyn Observer<Warning>,
     cancel: &AtomicBool,
 ) -> Result<Written, OutputError> {
     let layout = &plan.layout;

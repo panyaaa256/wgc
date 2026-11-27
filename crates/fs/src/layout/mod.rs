@@ -12,75 +12,21 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::nbt::{NbtError, RuleValue};
+use crate::Outcome;
+use crate::nbt::NbtError;
 use crate::region::parse_region_name;
-use crate::types::{DataVersion, DimensionId, FileKind};
+use crate::types::{DimensionId, FileKind};
 
-pub use data::{
-    forced_chunks, paper_defaults_config, paper_world_config, player_data_dir, spawn_mobs,
-};
 pub use files::{DimensionFiles, TripleFiles, list_dimension_files};
 pub use walk::{WorldFile, WorldFiles, files_in, world_files};
 
-/// The four layouts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum LayoutKind {
-    /// `region/`, `DIM-1/`, `DIM1/` in the world folder.
-    VanillaLegacy,
-    /// 26.1 and later: `dimensions/<ns>/<name>/`.
-    Vanilla,
-    /// Bukkit before 26.1: `<base>/`, `<base>_nether/DIM-1/`, `<base>_the_end/DIM1/`.
-    BukkitLegacy,
-    /// Bukkit 26.1 and later: `<base>/dimensions/<ns>/<name>/`.
-    Bukkit,
-}
-
-impl LayoutKind {
-    pub const fn is_bukkit(self) -> bool {
-        matches!(self, LayoutKind::Bukkit | LayoutKind::BukkitLegacy)
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            LayoutKind::VanillaLegacy => "vanilla_legacy",
-            LayoutKind::Vanilla => "vanilla",
-            LayoutKind::BukkitLegacy => "bukkit_legacy",
-            LayoutKind::Bukkit => "bukkit",
-        }
-    }
-}
+pub use wgc_core::layout::LayoutKind;
 
 /// One dimension of the world.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Dimension {
-    pub id: DimensionId,
-    /// The folder that holds `region/`, `entities/` and `poi/`.
-    pub dir: PathBuf,
-    /// The world folder this dimension belongs to (where `session.lock` is).
-    pub world_folder: PathBuf,
-}
+pub type Dimension = wgc_core::layout::Dimension<PathBuf>;
 
 /// The result of layout detection. Every later step finds the world's files through this.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorldLayout {
-    /// The input path, canonicalized.
-    pub root: PathBuf,
-    pub kind: LayoutKind,
-    /// Only for Bukkit layouts.
-    pub base: Option<String>,
-    /// Where `level.dat` and player data are.
-    pub main_world_folder: PathBuf,
-    /// Units of locking and output, sorted.
-    pub world_folders: Vec<PathBuf>,
-    /// Only for Bukkit layouts: the root.
-    pub server_root: Option<PathBuf>,
-    /// `Data.DataVersion` of the main `level.dat`.
-    pub data_version: Option<DataVersion>,
-    /// The mob spawning rule stored in the main `level.dat` (before 4772).
-    pub level_spawn_mobs: RuleValue,
-    /// Sorted by ID.
-    pub dimensions: Vec<Dimension>,
-}
+pub type WorldLayout = wgc_core::layout::WorldLayout<PathBuf>;
 
 /// Why the layout cannot be recognized.
 #[derive(Debug, thiserror::Error)]
@@ -118,6 +64,11 @@ pub enum LayoutError {
 }
 
 impl LayoutError {
+    /// A world that cannot be recognized leaves the command unable to start.
+    pub const fn outcome(&self) -> Outcome {
+        Outcome::Failed
+    }
+
     pub(crate) fn io(path: &Path, source: io::Error) -> Self {
         LayoutError::Io {
             path: path.to_path_buf(),
@@ -454,6 +405,7 @@ pub(crate) mod test_util {
 mod tests {
     use super::test_util::*;
     use super::*;
+    use crate::types::DataVersion;
 
     fn tmp() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()

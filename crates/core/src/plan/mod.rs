@@ -2,21 +2,23 @@
 //!
 //! The only source of truth for keeping a chunk is [`ChunkDecision::decision`];
 //! file actions and entry fates are derived from it by [`TriplePlan`]'s methods.
+//! `P` names files and folders.
 
 mod build;
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::io;
-use std::path::PathBuf;
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::vec::Vec;
 
-use crate::layout::{Dimension, LayoutError, WorldLayout};
-use crate::region::{ContentError, HEADER_BYTES, SECTOR_BYTES, StructuralIssue};
+use crate::layout::{Dimension, WorldLayout};
+use crate::region::{ContentError, HEADER_BYTES, SECTOR_BYTES, StructuralIssue, packed_sectors};
 use crate::types::{ChunkIndex, ChunkPos, DataVersion, DimensionId, FileKind, RegionPos};
 
-pub use build::build_plan;
-pub(crate) use build::read_inhabited;
+pub use build::{
+    Analysis, Externals, PlayerFiles, analyze_triple, decide, estimate, group_externals,
+    player_files, read_inhabited,
+};
 
-/// Options for [`build_plan`].
+/// Options for building a [`Plan`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlanOptions {
     /// Delete chunks only in these dimensions. `None` means all.
@@ -87,13 +89,13 @@ pub enum ExternalAction {
 
 /// One region-format file of a triple.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileInfo {
-    pub path: PathBuf,
+pub struct FileInfo<P> {
+    pub path: P,
     pub size: u64,
     /// Sorted by index.
     pub entries: Vec<EntryInfo>,
     /// `.mcc` files of this kind in this region, sorted by position.
-    pub externals: Vec<ExternalFile>,
+    pub externals: Vec<ExternalFile<P>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,14 +108,14 @@ pub struct EntryInfo {
 
 impl EntryInfo {
     fn packed_bytes(&self) -> u64 {
-        (crate::region::packed_sectors(self.length) * SECTOR_BYTES) as u64
+        (packed_sectors(self.length) * SECTOR_BYTES) as u64
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalFile {
+pub struct ExternalFile<P> {
     pub pos: ChunkPos,
-    pub path: PathBuf,
+    pub path: P,
     pub size: u64,
 }
 
@@ -129,23 +131,23 @@ pub struct ChunkDecision {
 
 /// The plan for one region triple.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TriplePlan {
+pub struct TriplePlan<P> {
     pub pos: RegionPos,
     /// Not empty means the whole triple is copied verbatim.
     pub issues: Vec<StructuralIssue>,
-    pub region: Option<FileInfo>,
-    pub entities: Option<FileInfo>,
-    pub poi: Option<FileInfo>,
+    pub region: Option<FileInfo<P>>,
+    pub entities: Option<FileInfo<P>>,
+    pub poi: Option<FileInfo<P>>,
     /// Chunks of the region file, sorted by index.
     pub chunks: Vec<ChunkDecision>,
 }
 
-impl TriplePlan {
+impl<P> TriplePlan<P> {
     pub fn is_verbatim(&self) -> bool {
         !self.issues.is_empty()
     }
 
-    pub fn file(&self, kind: FileKind) -> Option<&FileInfo> {
+    pub const fn file(&self, kind: FileKind) -> Option<&FileInfo<P>> {
         match kind {
             FileKind::Region => self.region.as_ref(),
             FileKind::Entities => self.entities.as_ref(),
@@ -248,8 +250,8 @@ impl TriplePlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OmittedFile {
-    pub path: PathBuf,
+pub struct OmittedFile<P> {
+    pub path: P,
     pub reason: OmitReason,
 }
 
@@ -261,10 +263,10 @@ pub struct BoundaryCluster {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DimensionPlan {
-    pub dimension: Dimension,
+pub struct DimensionPlan<P> {
+    pub dimension: Dimension<P>,
     /// Sorted by position.
-    pub triples: Vec<TriplePlan>,
+    pub triples: Vec<TriplePlan<P>>,
     pub boundary_warnings: Vec<BoundaryCluster>,
 }
 
@@ -274,7 +276,7 @@ pub struct Sizes {
     pub after: u64,
 }
 
-impl std::ops::AddAssign for Sizes {
+impl core::ops::AddAssign for Sizes {
     fn add_assign(&mut self, o: Sizes) {
         self.before += o.before;
         self.after += o.after;
@@ -299,41 +301,26 @@ pub struct Estimate {
 
 /// The plan for a whole world.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Plan {
-    pub layout: WorldLayout,
+pub struct Plan<P> {
+    pub layout: WorldLayout<P>,
     pub gc_dims: Option<BTreeSet<DimensionId>>,
     /// Sorted by dimension ID.
-    pub dimensions: Vec<DimensionPlan>,
+    pub dimensions: Vec<DimensionPlan<P>>,
     /// Sorted by path.
-    pub omitted_other_files: Vec<OmittedFile>,
+    pub omitted_other_files: Vec<OmittedFile<P>>,
     /// Dimensions whose forced chunks could not be read.
     pub protection_unknown: BTreeSet<DimensionId>,
-    pub dat_old_without_dat: Vec<PathBuf>,
+    pub dat_old_without_dat: Vec<P>,
     pub estimate: Estimate,
 }
 
-impl Plan {
+impl<P> Plan<P> {
     /// Whether GC deletes chunks in `dim`.
     pub fn is_targeted(&self, dim: &DimensionId) -> bool {
         is_targeted(self.gc_dims.as_ref(), dim)
     }
 }
 
-pub(crate) fn is_targeted(gc_dims: Option<&BTreeSet<DimensionId>>, dim: &DimensionId) -> bool {
+pub fn is_targeted(gc_dims: Option<&BTreeSet<DimensionId>>, dim: &DimensionId) -> bool {
     gc_dims.is_none_or(|dims| dims.contains(dim))
-}
-
-/// Why a plan could not be built.
-#[derive(Debug, thiserror::Error)]
-pub enum PlanError {
-    #[error("cannot read {path}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error(transparent)]
-    Layout(#[from] LayoutError),
-    #[error("cancelled")]
-    Cancelled,
 }
