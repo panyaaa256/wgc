@@ -336,8 +336,13 @@ impl RegionFile {
     }
 }
 
+/// The big-endian `u32` at `at`. Every caller checks the bounds first; bytes
+/// past the end would read as zero rather than panic.
 fn be_u32(bytes: &[u8], at: usize) -> u32 {
-    u32::from_be_bytes(bytes[at..at + 4].try_into().expect("4 bytes"))
+    bytes
+        .get(at..)
+        .and_then(<[u8]>::first_chunk)
+        .map_or(0, |b| u32::from_be_bytes(*b))
 }
 
 /// Builders for synthetic test data, shared with the crates that depend on this one.
