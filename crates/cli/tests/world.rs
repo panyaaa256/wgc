@@ -250,6 +250,10 @@ fn dimension_arguments() {
             .code(),
         Some(0)
     );
+    // With several unknown dimensions, the error names the first in ID order.
+    let o = wgc(&["gc", s(w.path()), "--dim", "zzz:b", "--dim", "aaa:a"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(stderr(&o).contains("no dimension aaa:a."), "{}", stderr(&o));
 }
 
 #[test]

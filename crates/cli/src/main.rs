@@ -168,12 +168,15 @@ fn gc(a: &GcArgs, cli: &Cli, term: &Terminal) -> u8 {
         Ok(l) => l,
         Err(code) => return code,
     };
-    if let Some(missing) = layout.unknown_dimension(&a.dimensions) {
+    let gc_dims: Option<BTreeSet<_>> =
+        (!a.dimensions.is_empty()).then(|| a.dimensions.iter().cloned().collect());
+    if let Some(missing) = gc_dims
+        .as_ref()
+        .and_then(|dims| layout.unknown_dimension(dims))
+    {
         term.error(&messages::unknown_dimension(missing.as_str()));
         return exit::USAGE;
     }
-    let gc_dims: Option<BTreeSet<_>> =
-        (!a.dimensions.is_empty()).then(|| a.dimensions.iter().cloned().collect());
     match &a.out {
         None => gc_estimate(a, cli, term, &layout, gc_dims),
         Some(out) => gc_output(a, cli, term, &layout, gc_dims, out),
