@@ -84,8 +84,9 @@ pub fn detect(path: &Path) -> Result<WorldLayout, LayoutError> {
         return Err(LayoutError::NotAWorld { path: root });
     }
 
-    let (kind, base) = classify(&root)?;
-    let dims = collect_dimensions(&root, kind, base.as_deref())?;
+    let shape = classify(&root)?;
+    let dims = collect_dimensions(&root, &shape)?;
+    let (kind, base) = shape.into_parts();
     let main_world_folder = match &base {
         Some(base) => root.join(base),
         None => root.clone(),
@@ -109,7 +110,27 @@ pub fn detect(path: &Path) -> Result<WorldLayout, LayoutError> {
     })
 }
 
-fn classify(root: &Path) -> Result<(LayoutKind, Option<String>), LayoutError> {
+/// A recognized layout with what locating its dimensions needs: the base
+/// folder name, which only Bukkit layouts have.
+enum Shape {
+    VanillaLegacy,
+    Vanilla,
+    BukkitLegacy { base: String },
+    Bukkit { base: String },
+}
+
+impl Shape {
+    fn into_parts(self) -> (LayoutKind, Option<String>) {
+        match self {
+            Shape::VanillaLegacy => (LayoutKind::VanillaLegacy, None),
+            Shape::Vanilla => (LayoutKind::Vanilla, None),
+            Shape::BukkitLegacy { base } => (LayoutKind::BukkitLegacy, Some(base)),
+            Shape::Bukkit { base } => (LayoutKind::Bukkit, Some(base)),
+        }
+    }
+}
+
+fn classify(root: &Path) -> Result<Shape, LayoutError> {
     let trio = |dir: &Path| -> [PathBuf; 3] {
         let mc = dir.join("dimensions").join("minecraft");
         [
@@ -129,7 +150,7 @@ fn classify(root: &Path) -> Result<(LayoutKind, Option<String>), LayoutError> {
                     suggested: base_dir,
                 });
             }
-            return Ok((LayoutKind::Bukkit, Some(base)));
+            return Ok(Shape::Bukkit { base });
         }
         let nether = root.join(format!("{base}_nether")).join("DIM-1");
         let end = root.join(format!("{base}_the_end")).join("DIM1");
@@ -141,14 +162,14 @@ fn classify(root: &Path) -> Result<(LayoutKind, Option<String>), LayoutError> {
                     suggested: base_dir,
                 });
             }
-            return Ok((LayoutKind::BukkitLegacy, Some(base)));
+            return Ok(Shape::BukkitLegacy { base });
         }
     }
 
-    let kind = if any_world_dir(&trio(root))? {
-        LayoutKind::Vanilla
+    let shape = if any_world_dir(&trio(root))? {
+        Shape::Vanilla
     } else if any_world_dir(&[root.to_path_buf(), root.join("DIM-1"), root.join("DIM1")])? {
-        LayoutKind::VanillaLegacy
+        Shape::VanillaLegacy
     } else {
         return Err(LayoutError::NotAWorld {
             path: root.to_path_buf(),
@@ -163,7 +184,7 @@ fn classify(root: &Path) -> Result<(LayoutKind, Option<String>), LayoutError> {
     {
         return Err(LayoutError::LooksLikeBukkitWorldFolder);
     }
-    Ok((kind, None))
+    Ok(shape)
 }
 
 /// Candidate Bukkit bases: `level-name` if usable, otherwise elected from the directory structure.
@@ -256,8 +277,7 @@ pub(crate) fn read_dir_opt(dir: &Path) -> Result<Vec<fs::DirEntry>, LayoutError>
 
 fn collect_dimensions(
     root: &Path,
-    kind: LayoutKind,
-    base: Option<&str>,
+    shape: &Shape,
 ) -> Result<BTreeMap<DimensionId, Dimension>, LayoutError> {
     let mut dims = BTreeMap::new();
     let fixed = |dims: &mut BTreeMap<DimensionId, Dimension>,
@@ -275,12 +295,12 @@ fn collect_dimensions(
             );
         }
     };
-    match (kind, base) {
-        (LayoutKind::Bukkit, Some(base)) => {
+    match shape {
+        Shape::Bukkit { base } => {
             let world = root.join(base);
             collect_tree(&mut dims, &world.join("dimensions"), &world)?;
         }
-        (LayoutKind::BukkitLegacy, Some(base)) => {
+        Shape::BukkitLegacy { base } => {
             for entry in read_dir_opt(root)? {
                 let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                     continue;
@@ -304,8 +324,8 @@ fn collect_dimensions(
             let end = root.join(format!("{base}_the_end"));
             fixed(&mut dims, DimensionId::the_end(), end.join("DIM1"), &end);
         }
-        (LayoutKind::Vanilla, _) => collect_tree(&mut dims, &root.join("dimensions"), root)?,
-        (LayoutKind::VanillaLegacy, _) => {
+        Shape::Vanilla => collect_tree(&mut dims, &root.join("dimensions"), root)?,
+        Shape::VanillaLegacy => {
             collect_tree(&mut dims, &root.join("dimensions"), root)?;
             fixed(
                 &mut dims,
@@ -321,7 +341,6 @@ fn collect_dimensions(
             );
             fixed(&mut dims, DimensionId::the_end(), root.join("DIM1"), root);
         }
-        _ => unreachable!("bukkit layouts always have a base"),
     }
     Ok(dims)
 }
