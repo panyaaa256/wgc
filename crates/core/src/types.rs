@@ -46,6 +46,11 @@ impl ChunkPos {
         (self.x as u32 as i64) | ((self.z as i64) << 32)
     }
 
+    /// The chunk `dx` and `dz` chunks away, if its coordinates fit an `i32`.
+    pub fn offset(self, dx: i32, dz: i32) -> Option<Self> {
+        Some(Self::new(self.x.checked_add(dx)?, self.z.checked_add(dz)?))
+    }
+
     /// The region that contains this chunk.
     pub const fn region(self) -> RegionPos {
         RegionPos {

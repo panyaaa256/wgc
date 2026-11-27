@@ -210,9 +210,7 @@ pub fn decide<P: Clone>(
     for c in forced {
         for dx in -FORCELOAD_MARGIN..=FORCELOAD_MARGIN {
             for dz in -FORCELOAD_MARGIN..=FORCELOAD_MARGIN {
-                if let (Some(x), Some(z)) = (c.x.checked_add(dx), c.z.checked_add(dz)) {
-                    forceload.insert(ChunkPos::new(x, z));
-                }
+                forceload.extend(c.offset(dx, dz));
             }
         }
     }
@@ -299,9 +297,7 @@ fn boundary<P>(triples: &[TriplePlan<P>], deleted: &BTreeSet<ChunkPos>) -> Vec<B
     let neighbors4 = |p: ChunkPos| {
         [(1, 0), (-1, 0), (0, 1), (0, -1)]
             .into_iter()
-            .filter_map(move |(dx, dz)| {
-                Some(ChunkPos::new(p.x.checked_add(dx)?, p.z.checked_add(dz)?))
-            })
+            .filter_map(move |(dx, dz)| p.offset(dx, dz))
     };
     let mut marked: BTreeSet<ChunkPos> = triples
         .iter()
@@ -325,10 +321,10 @@ fn boundary<P>(triples: &[TriplePlan<P>], deleted: &BTreeSet<ChunkPos>) -> Vec<B
             cluster.max = ChunkPos::new(cluster.max.x.max(p.x), cluster.max.z.max(p.z));
             for dx in -1..=1 {
                 for dz in -1..=1 {
-                    if let (Some(x), Some(z)) = (p.x.checked_add(dx), p.z.checked_add(dz))
-                        && marked.remove(&ChunkPos::new(x, z))
+                    if let Some(n) = p.offset(dx, dz)
+                        && marked.remove(&n)
                     {
-                        queue.push_back(ChunkPos::new(x, z));
+                        queue.push_back(n);
                     }
                 }
             }
