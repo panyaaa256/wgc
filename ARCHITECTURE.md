@@ -44,17 +44,29 @@ binary).
 
 ### `crates/core`
 
-Pure data handling, `no_std` + `alloc`
-([ADR-0013](docs/adr/0013-keep-the-core-crate-no-std.md)).
+Pure data handling and every decision made from it, `no_std` + `alloc`
+([ADR-0013](docs/adr/0013-keep-the-core-crate-no-std.md)). Files are read
+through `WorldSource`; types that name files are generic over the source's
+path type.
 
+- `source`: `WorldSource`, read-only access to a world's files. It has no way
+  to write.
 - `types`: shared value types (coordinates, dimension IDs, file kinds, the
-  check IDs `GuardId`).
+  check IDs `GuardId`), and `Known` and `UnknownReason`.
 - `versions`: the DataVersion constants the code branches on.
 - `region`: parsing Anvil region files, decompressing chunks, structural
   checks (S-1..S-8), and repacking a region from kept payloads.
 - `inflate`: zlib and gzip decoding with an output size limit.
 - `nbt`: reading the few NBT fields wgc needs from chunks, `level.dat`, player
   data and forced-chunk files. The only module that uses the NBT library.
+- `layout`: the recognized layout (`WorldLayout`, `Dimension`, the region
+  triples of a dimension) and the files it points at: game rules, forced
+  chunks, player data and Paper configuration.
+- `plan`: the `Plan` and how it is built: analyzing one region triple,
+  deciding every chunk of a dimension, the boundary warnings, player files and
+  the size estimate.
+- `trust`: the trust checks T-1..T-5.
+- `report`: turning a plan and trust results into the JSON reports.
 
 The `test-util` feature exposes builders for synthetic region files and NBT to
 the tests of the other crates.
@@ -62,19 +74,21 @@ the tests of the other crates.
 ### `crates/fs`
 
 Everything that touches the host file system, and the steps of each command.
+Its `plan`, `trust` and `report` modules run the `wgc-core` ones on the host.
 
-- `types`: the `wgc-core` value types, plus `Known` and `UnknownReason`, and
-  `Observer`, `Progress` and `Warning`, the channel through which long
-  operations talk to the caller.
-- `layout`: recognizing the world layout and enumerating files (`WorldLayout`).
-  Every later step finds files through it.
+- `source`: `FsSource`, the host file system as a `WorldSource`.
+- `types`: the `wgc-core` value types for host paths, and `Observer`,
+  `Progress` and `Warning`, the channel through which long operations talk to
+  the caller.
+- `layout`: recognizing the world layout, listing region triples and walking
+  every file under the world folders. Every later step finds files through
+  the `WorldLayout` it returns.
 - `lock`: `session.lock` locking.
 - `sys`: platform calls (file locks, free space, privileges). The only module
   with `unsafe` code.
-- `trust`: the trust checks T-1..T-5.
-- `plan`: building the `Plan` from the layout: the per-chunk and per-file
-  decisions.
-- `report`: turning a plan and trust results into the JSON reports.
+- `plan`: `build_plan`, which reads the region triples in parallel.
+- `trust`: running the trust checks before and after planning.
+- `report`: the lock status, paths relative to the input, and `wgc scan`.
 - `output`: `gc --out` (`run_gc`), copying, verification, the `.wgc/` records,
   and `wgc verify`.
 
