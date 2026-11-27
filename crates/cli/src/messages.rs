@@ -294,12 +294,12 @@ pub fn verify(e: &VerifyError) -> String {
             let mut text =
                 "The world has changed since the output was created. Swapping it in would lose those changes.".to_owned();
             for c in changed.iter().take(10) {
-                let (kind, path) = match c {
-                    ChangedFile::Added(p) => ("added", p),
-                    ChangedFile::Removed(p) => ("removed", p),
-                    ChangedFile::Modified(p) => ("modified", p),
+                let kind = match c {
+                    ChangedFile::Added(_) => "added",
+                    ChangedFile::Removed(_) => "removed",
+                    ChangedFile::Modified(_) => "modified",
                 };
-                text.push_str(&format!("\n  {kind}: {path}"));
+                text.push_str(&format!("\n  {kind}: {}", c.path()));
             }
             if changed.len() > 10 {
                 text.push_str(&format!("\n  ... and {} more", changed.len() - 10));

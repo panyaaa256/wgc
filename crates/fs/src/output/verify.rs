@@ -73,10 +73,9 @@ pub(crate) fn check_output(
     // V-6: the source did not change while we worked.
     let now = state.recapture()?;
     for change in state.diff(&now) {
-        let (ChangedFile::Added(p) | ChangedFile::Removed(p) | ChangedFile::Modified(p)) = &change;
         failures.push(VerifyFailure {
             check: "V-6",
-            path: plan.layout.root.join(p),
+            path: plan.layout.root.join(change.path()),
             detail: format!("{change:?}"),
         });
     }
@@ -255,14 +254,9 @@ impl VerifyJson {
             Err(e) => (e.result_name(), None, Vec::new()),
         };
         let changed = match result {
-            Err(VerifyError::Changed(changed)) => changed
-                .iter()
-                .map(|c| match c {
-                    ChangedFile::Added(p) | ChangedFile::Removed(p) | ChangedFile::Modified(p) => {
-                        p.clone()
-                    }
-                })
-                .collect(),
+            Err(VerifyError::Changed(changed)) => {
+                changed.iter().map(|c| c.path().to_owned()).collect()
+            }
             _ => Vec::new(),
         };
         VerifyJson {

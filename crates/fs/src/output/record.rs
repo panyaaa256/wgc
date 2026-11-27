@@ -77,6 +77,14 @@ pub enum ChangedFile {
     Modified(String),
 }
 
+impl ChangedFile {
+    /// The file, relative to the world, with `/` separators.
+    pub fn path(&self) -> &str {
+        let (ChangedFile::Added(p) | ChangedFile::Removed(p) | ChangedFile::Modified(p)) = self;
+        p
+    }
+}
+
 pub(crate) use wgc::gc::Stage;
 
 fn report_err(e: ReportError) -> OutputError {
