@@ -17,7 +17,7 @@ use crate::plan::{
     RemoveReason,
 };
 use crate::region::{ContentError, StructuralId};
-use crate::trust::{CheckStatus, TrustDetail, TrustReport};
+use crate::trust::{CheckResult, CheckStatus, TrustDetail, TrustReport};
 use crate::types::{ChunkPos, DimensionId, FileKind, GuardId, UnknownReason};
 
 /// A path the report has to name is not valid UTF-8.
@@ -435,7 +435,7 @@ pub fn scan_report<P: Clone>(
         trust: trust
             .checks
             .iter()
-            .map(|c| trust_item(c.id, &c.status, &rel))
+            .map(|c| trust_item(c, &rel))
             .collect::<Result<_, _>>()?,
         other_files: OtherFiles {
             omitted: plan
@@ -625,11 +625,10 @@ fn omit_reason(r: OmitReason) -> OmitJson {
 }
 
 fn trust_item<P>(
-    id: GuardId,
-    status: &CheckStatus<P>,
+    check: &CheckResult<P>,
     rel: &dyn Fn(&P) -> Result<String, NonUtf8Path<P>>,
 ) -> Result<TrustItem, NonUtf8Path<P>> {
-    let (name, details, reason) = match status {
+    let (name, details, reason) = match &check.status {
         CheckStatus::Pass => (TrustStatus::Pass, Vec::new(), None),
         CheckStatus::NotApplicable => (TrustStatus::NotApplicable, Vec::new(), None),
         CheckStatus::Fail(details) => (
@@ -685,7 +684,7 @@ fn trust_item<P>(
         ),
     };
     Ok(TrustItem {
-        id,
+        id: check.id,
         status: name,
         details,
         reason,
