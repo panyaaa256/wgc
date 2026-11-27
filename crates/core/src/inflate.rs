@@ -85,7 +85,9 @@ impl Inflater {
             let member = &out[member_start..];
             let (crc, size) = trailer.split_at(4);
             // ISIZE is the member size modulo 2^32.
-            if le_u32(crc) != crc32fast::hash(member) || le_u32(size) != member.len() as u32 {
+            if le_u32(crc) != Some(crc32fast::hash(member))
+                || le_u32(size) != Some(member.len() as u32)
+            {
                 return Err(InflateError::Corrupt);
             }
             data = &data[header + consumed + GZIP_TRAILER..];
@@ -184,11 +186,9 @@ fn gzip_header_len(data: &[u8]) -> Result<usize, InflateError> {
     Ok(len)
 }
 
-fn le_u32(bytes: &[u8]) -> u32 {
-    bytes
-        .iter()
-        .rev()
-        .fold(0, |acc, &b| (acc << 8) | u32::from(b))
+/// The little-endian `u32` in `bytes`, if it is exactly four bytes long.
+pub(crate) fn le_u32(bytes: &[u8]) -> Option<u32> {
+    bytes.try_into().ok().map(u32::from_le_bytes)
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use super::EXTERNAL_FLAG;
-use crate::inflate::{InflateError, Inflater};
+use crate::inflate::{InflateError, Inflater, le_u32};
 
 const GZIP: u8 = 1;
 const ZLIB: u8 = 2;
@@ -126,7 +126,7 @@ fn lz4_block_stream(mut data: &[u8], out: &mut Vec<u8>) -> Result<(), Decompress
         let max_block = 1usize << (LZ4_LEVEL_BASE + u32::from(token & 0x0F));
         let compressed_len = le_len(&data[9..13])?;
         let original_len = le_len(&data[13..17])?;
-        let checksum = le_u32(&data[17..21])?;
+        let checksum = le_u32(&data[17..21]).ok_or(DecompressError::Corrupt)?;
         if original_len == 0 {
             if compressed_len != 0 || checksum != 0 {
                 return Err(DecompressError::Corrupt);
@@ -166,14 +166,9 @@ fn lz4_block_stream(mut data: &[u8], out: &mut Vec<u8>) -> Result<(), Decompress
     }
 }
 
-fn le_u32(bytes: &[u8]) -> Result<u32, DecompressError> {
-    let bytes = bytes.try_into().map_err(|_| DecompressError::Corrupt)?;
-    Ok(u32::from_le_bytes(bytes))
-}
-
 /// A little-endian `int` length, which must not be negative.
 fn le_len(bytes: &[u8]) -> Result<usize, DecompressError> {
-    let v = le_u32(bytes)?.cast_signed();
+    let v = le_u32(bytes).ok_or(DecompressError::Corrupt)?.cast_signed();
     usize::try_from(v).map_err(|_| DecompressError::Corrupt)
 }
 
