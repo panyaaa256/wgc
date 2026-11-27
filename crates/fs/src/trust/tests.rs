@@ -62,7 +62,7 @@ fn report(path: &std::path::Path, options: PlanOptions) -> TrustReport {
     let plan = wgc::plan::build_plan(
         &FsWorld::new(&layout),
         &Rayon,
-        &options,
+        options,
         &NoopObserver,
         &AtomicBool::new(false),
     )

@@ -67,7 +67,7 @@ pub fn run_scan<W: World>(
     cancel: &AtomicBool,
 ) -> Result<ScanReport, ReportError<W::Error, PathOf<W>>> {
     let (lock, _held) = try_lock_for_report(world, observer);
-    let plan = build_plan(world, runner, &PlanOptions::default(), observer, cancel)?;
+    let plan = build_plan(world, runner, PlanOptions::default(), observer, cancel)?;
     let trust = check_trust(world.source(), &plan);
     Ok(scan_report(world, &plan, &trust, lock)?)
 }
@@ -82,7 +82,7 @@ pub fn run_estimate<W: World>(
     cancel: &AtomicBool,
 ) -> Result<GcReport, ReportError<W::Error, PathOf<W>>> {
     let (lock, _held) = try_lock_for_report(world, observer);
-    let plan = build_plan(world, runner, &PlanOptions { gc_dims }, observer, cancel)?;
+    let plan = build_plan(world, runner, PlanOptions { gc_dims }, observer, cancel)?;
     let trust = check_trust(world.source(), &plan);
     let scan = scan_report(world, &plan, &trust, lock)?;
     Ok(gc_report(scan, None, &BTreeSet::new(), &plan))

@@ -150,7 +150,7 @@ pub fn run_gc<H: GcHost>(
     let plan_options = PlanOptions {
         gc_dims: options.gc_dims.clone(),
     };
-    let plan = build_plan(host, runner, &plan_options, observer, cancel).map_err(plan_error)?;
+    let plan = build_plan(host, runner, plan_options, observer, cancel).map_err(plan_error)?;
 
     // 6. The same checks against the plan. They match step 3 unless a file
     // changed meanwhile, e.g. under a running game when L-1 was forced.

@@ -73,7 +73,7 @@ fn run_scan(
     )?)
 }
 
-fn plan(layout: &WorldLayout, options: &PlanOptions) -> Plan {
+fn plan(layout: &WorldLayout, options: PlanOptions) -> Plan {
     let cancel = AtomicBool::new(false);
     wgc::plan::build_plan(
         &FsWorld::new(layout),
@@ -207,7 +207,7 @@ fn lock_unavailable_is_reported() {
 fn gc_report_adds_its_fields() {
     let t = world();
     let layout = crate::layout::detect(t.path()).unwrap();
-    let plan = plan(&layout, &PlanOptions::default());
+    let plan = plan(&layout, PlanOptions::default());
     let scan = scan_report(&plan);
     let gc = gc_report(scan, None, &BTreeSet::from([GuardId::T3]), &plan).unwrap();
     let v = serde_json::to_value(&gc).unwrap();

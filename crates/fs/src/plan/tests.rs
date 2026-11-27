@@ -65,7 +65,7 @@ fn plan_with(path: &Path, options: PlanOptions) -> Plan {
     wgc::plan::build_plan(
         &FsWorld::new(&layout),
         &Rayon,
-        &options,
+        options,
         &NoopObserver,
         &AtomicBool::new(false),
     )
@@ -400,7 +400,7 @@ fn cancellation() {
     let result = wgc::plan::build_plan(
         &FsWorld::new(&layout),
         &Rayon,
-        &PlanOptions::default(),
+        PlanOptions::default(),
         &NoopObserver,
         &AtomicBool::new(true),
     );

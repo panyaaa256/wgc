@@ -38,7 +38,7 @@ pub type ObserverOf<'a, W> = &'a dyn Observer<Warning<PathOf<W>, <W as World>::L
 pub fn build_plan<W: World>(
     world: &W,
     runner: &impl Runner,
-    options: &PlanOptions,
+    options: PlanOptions,
     observer: ObserverOf<'_, W>,
     cancel: &AtomicBool,
 ) -> Result<Plan<PathOf<W>>, PlanError<W::Error>> {
@@ -110,7 +110,7 @@ pub fn build_plan<W: World>(
     );
     Ok(Plan {
         layout: layout.clone(),
-        gc_dims: options.gc_dims.clone(),
+        gc_dims: options.gc_dims,
         dimensions,
         omitted_other_files: players.omitted,
         protection_unknown,
