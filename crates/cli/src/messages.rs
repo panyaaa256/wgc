@@ -2,12 +2,34 @@
 
 use wgc_fs::layout::LayoutError;
 use wgc_fs::lock::LockError;
-use wgc_fs::output::{ChangedFile, OutputError, VerifyError, VerifyFailure};
+use wgc_fs::output::{ChangedFile, OutputError, VerifyError};
 use wgc_fs::plan::PlanError;
 use wgc_fs::report::{DetailJson, Notice, ReasonJson, ReportError};
 use wgc_fs::types::{GuardId, Warning};
 
 use wgc_fs::report::ListCounts;
+
+/// How many entries of a long list are shown.
+pub const LIST_LIMIT: usize = 10;
+
+/// The line that stands for the entries of a list of `total` past
+/// [`LIST_LIMIT`], if there are any.
+pub fn more(total: usize) -> Option<String> {
+    (total > LIST_LIMIT).then(|| format!("... and {} more", total - LIST_LIMIT))
+}
+
+/// Appends the first [`LIST_LIMIT`] items, one indented line each.
+fn push_list<T>(text: &mut String, items: &[T], show: impl Fn(&T) -> String) {
+    let lines = items
+        .iter()
+        .take(LIST_LIMIT)
+        .map(show)
+        .chain(more(items.len()));
+    for line in lines {
+        text.push_str("\n  ");
+        text.push_str(&line);
+    }
+}
 
 pub fn notice(n: Notice) -> &'static str {
     match n {
@@ -262,17 +284,9 @@ pub fn output(e: &OutputError) -> String {
         OutputError::Plan(p) => plan(p, "gc"),
         OutputError::Verification(failures) => {
             let mut text = "The output failed verification; it is incomplete. Please report this with .wgc/failure.json.".to_owned();
-            for VerifyFailure {
-                check,
-                path,
-                detail,
-            } in failures.iter().take(10)
-            {
-                text.push_str(&format!("\n  {check} {}: {detail}", path.display()));
-            }
-            if failures.len() > 10 {
-                text.push_str(&format!("\n  ... and {} more", failures.len() - 10));
-            }
+            push_list(&mut text, failures, |f| {
+                format!("{} {}: {}", f.check, f.path.display(), f.detail)
+            });
             text
         }
         OutputError::Io { path, source } => format!("Cannot access {}: {source}.", path.display()),
@@ -293,17 +307,14 @@ pub fn verify(e: &VerifyError) -> String {
         VerifyError::Changed(changed) => {
             let mut text =
                 "The world has changed since the output was created. Swapping it in would lose those changes.".to_owned();
-            for c in changed.iter().take(10) {
+            push_list(&mut text, changed, |c| {
                 let kind = match c {
                     ChangedFile::Added(_) => "added",
                     ChangedFile::Removed(_) => "removed",
                     ChangedFile::Modified(_) => "modified",
                 };
-                text.push_str(&format!("\n  {kind}: {}", c.path()));
-            }
-            if changed.len() > 10 {
-                text.push_str(&format!("\n  ... and {} more", changed.len() - 10));
-            }
+                format!("{kind}: {}", c.path())
+            });
             text
         }
         VerifyError::InUse { .. } => "The world is in use.".to_owned(),

@@ -185,18 +185,12 @@ pub fn bytes(n: u64) -> String {
     }
 }
 
-const LIST_LIMIT: usize = 10;
-
 fn list<T>(out: &mut dyn Write, items: &[T], show: impl Fn(&T) -> String) -> std::io::Result<()> {
-    for item in items.iter().take(LIST_LIMIT) {
+    for item in items.iter().take(messages::LIST_LIMIT) {
         writeln!(out, "    {}", show(item))?;
     }
-    if items.len() > LIST_LIMIT {
-        writeln!(
-            out,
-            "    ... and {} more (see --json)",
-            items.len() - LIST_LIMIT
-        )?;
+    if let Some(more) = messages::more(items.len()) {
+        writeln!(out, "    {more} (see --json)")?;
     }
     Ok(())
 }
