@@ -221,7 +221,7 @@ pub(crate) fn write_records(
         }
     }
     for sizes in plan.estimate.dimensions.values() {
-        for s in [sizes.region, sizes.entities, sizes.poi] {
+        for s in *sizes {
             summary.size_before += s.before;
             summary.size_after += s.after;
         }

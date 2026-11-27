@@ -16,9 +16,7 @@ use crate::source::WorldSource;
 pub struct Analysis<P> {
     pos: RegionPos,
     issues: Vec<StructuralIssue>,
-    region: Option<FileInfo<P>>,
-    entities: Option<FileInfo<P>>,
-    poi: Option<FileInfo<P>>,
+    files: PerKind<Option<FileInfo<P>>>,
     chunks: ChunkSummaries,
 }
 
@@ -28,7 +26,7 @@ pub type Externals<P> = BTreeMap<RegionPos, BTreeMap<ChunkPos, P>>;
 /// The `.mcc` files of `kind` in `files`, grouped by region.
 pub fn group_externals<P: Clone>(files: &DimensionFiles<P>, kind: FileKind) -> Externals<P> {
     let mut map = Externals::new();
-    for (pos, path) in files.externals(kind) {
+    for (pos, path) in &files.externals[kind] {
         map.entry(pos.region())
             .or_default()
             .insert(*pos, path.clone());
@@ -37,18 +35,16 @@ pub fn group_externals<P: Clone>(files: &DimensionFiles<P>, kind: FileKind) -> E
 }
 
 /// Reads and parses the files of one triple. `externals_of` holds the `.mcc`
-/// files of each [`FileKind`], in [`FileKind::ALL`] order.
+/// files of each [`FileKind`].
 pub fn analyze_triple<S: WorldSource>(
     source: &S,
     triple: &TripleFiles<S::Path>,
-    externals_of: &[Externals<S::Path>; 3],
+    externals_of: &PerKind<Externals<S::Path>>,
 ) -> Result<Analysis<S::Path>, S::Error> {
     let mut analysis = Analysis {
         pos: triple.pos,
         issues: Vec::new(),
-        region: None,
-        entities: None,
-        poi: None,
+        files: PerKind::default(),
         chunks: Vec::new(),
     };
     let empty = BTreeMap::new();
@@ -56,9 +52,7 @@ pub fn analyze_triple<S: WorldSource>(
         let Some(path) = triple.get(kind) else {
             continue;
         };
-        let externals = externals_of[kind as usize]
-            .get(&triple.pos)
-            .unwrap_or(&empty);
+        let externals = externals_of[kind].get(&triple.pos).unwrap_or(&empty);
         let present: BTreeSet<ChunkPos> = externals.keys().copied().collect();
         let file = RegionFile::parse(kind, triple.pos, source.read(path)?, &present);
         analysis.issues.extend_from_slice(file.issues());
@@ -91,11 +85,7 @@ pub fn analyze_triple<S: WorldSource>(
                 .collect(),
             externals,
         };
-        match kind {
-            FileKind::Region => analysis.region = Some(info),
-            FileKind::Entities => analysis.entities = Some(info),
-            FileKind::Poi => analysis.poi = Some(info),
-        }
+        analysis.files[kind] = Some(info);
     }
     analysis.issues.sort();
     Ok(analysis)
@@ -143,7 +133,7 @@ pub fn read_inhabited<S: WorldSource>(
     let empty = BTreeMap::new();
     let mut found = BTreeMap::new();
     for triple in files.triples.iter().filter(|t| regions.contains(&t.pos)) {
-        let Some(path) = &triple.region else {
+        let Some(path) = &triple.files.region else {
             continue;
         };
         let externals = externals.get(&triple.pos).unwrap_or(&empty);
@@ -278,9 +268,7 @@ pub fn decide<P: Clone>(
         triples.push(TriplePlan {
             pos: a.pos,
             issues: a.issues,
-            region: a.region,
-            entities: a.entities,
-            poi: a.poi,
+            files: a.files,
             chunks,
         });
     }
@@ -413,11 +401,9 @@ pub fn estimate<'a, P: Ord + 'a>(
     for dim in dimensions {
         let mut sizes = KindSizes::default();
         for t in &dim.triples {
-            sizes.region += t.sizes(FileKind::Region);
-            sizes.entities += t.sizes(FileKind::Entities);
-            sizes.poi += t.sizes(FileKind::Poi);
+            sizes += PerKind::from_fn(|kind| t.sizes(kind));
         }
-        est.total_output_bytes += sizes.region.after + sizes.entities.after + sizes.poi.after;
+        est.total_output_bytes += sizes.map(|s| s.after).total();
         est.dimensions.insert(dim.dimension.id.clone(), sizes);
     }
 

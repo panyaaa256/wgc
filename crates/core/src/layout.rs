@@ -11,7 +11,9 @@ use alloc::vec::Vec;
 
 use crate::nbt::{self, NbtError, RuleValue};
 use crate::source::WorldSource;
-use crate::types::{ChunkPos, DataVersion, DimensionId, FileKind, Known, RegionPos, UnknownReason};
+use crate::types::{
+    ChunkPos, DataVersion, DimensionId, FileKind, Known, PerKind, RegionPos, UnknownReason,
+};
 use crate::versions::{DV_FILES_26_1, DV_MAX_KNOWN};
 
 /// File name of the lock in each world folder. The game holds it while the
@@ -82,35 +84,23 @@ pub struct WorldLayout<P> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TripleFiles<P> {
     pub pos: RegionPos,
-    pub region: Option<P>,
-    pub entities: Option<P>,
-    pub poi: Option<P>,
+    pub files: PerKind<Option<P>>,
 }
 
 impl<P> TripleFiles<P> {
     pub const fn new(pos: RegionPos) -> Self {
         Self {
             pos,
-            region: None,
-            entities: None,
-            poi: None,
+            files: PerKind {
+                region: None,
+                entities: None,
+                poi: None,
+            },
         }
     }
 
-    pub const fn get(&self, kind: FileKind) -> Option<&P> {
-        match kind {
-            FileKind::Region => self.region.as_ref(),
-            FileKind::Entities => self.entities.as_ref(),
-            FileKind::Poi => self.poi.as_ref(),
-        }
-    }
-
-    pub const fn slot(&mut self, kind: FileKind) -> &mut Option<P> {
-        match kind {
-            FileKind::Region => &mut self.region,
-            FileKind::Entities => &mut self.entities,
-            FileKind::Poi => &mut self.poi,
-        }
+    pub fn get(&self, kind: FileKind) -> Option<&P> {
+        self.files[kind].as_ref()
     }
 }
 
@@ -119,37 +109,15 @@ impl<P> TripleFiles<P> {
 pub struct DimensionFiles<P> {
     /// Sorted by position.
     pub triples: Vec<TripleFiles<P>>,
-    pub region_externals: BTreeMap<ChunkPos, P>,
-    pub entities_externals: BTreeMap<ChunkPos, P>,
-    pub poi_externals: BTreeMap<ChunkPos, P>,
+    /// External `.mcc` files of each kind.
+    pub externals: PerKind<BTreeMap<ChunkPos, P>>,
 }
 
 impl<P> Default for DimensionFiles<P> {
     fn default() -> Self {
         Self {
             triples: Vec::new(),
-            region_externals: BTreeMap::new(),
-            entities_externals: BTreeMap::new(),
-            poi_externals: BTreeMap::new(),
-        }
-    }
-}
-
-impl<P> DimensionFiles<P> {
-    /// External `.mcc` files of `kind`.
-    pub const fn externals(&self, kind: FileKind) -> &BTreeMap<ChunkPos, P> {
-        match kind {
-            FileKind::Region => &self.region_externals,
-            FileKind::Entities => &self.entities_externals,
-            FileKind::Poi => &self.poi_externals,
-        }
-    }
-
-    pub const fn externals_mut(&mut self, kind: FileKind) -> &mut BTreeMap<ChunkPos, P> {
-        match kind {
-            FileKind::Region => &mut self.region_externals,
-            FileKind::Entities => &mut self.entities_externals,
-            FileKind::Poi => &mut self.poi_externals,
+            externals: PerKind::from_fn(|_| BTreeMap::new()),
         }
     }
 }

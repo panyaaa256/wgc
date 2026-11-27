@@ -18,7 +18,7 @@ use crate::plan::{
 };
 use crate::region::{ContentError, StructuralId};
 use crate::trust::{CheckResult, CheckStatus, TrustDetail, TrustReport};
-use crate::types::{ChunkPos, DimensionId, FileKind, GuardId, UnknownReason};
+use crate::types::{ChunkPos, DimensionId, FileKind, GuardId, PerKind, UnknownReason};
 
 /// A path the report has to name is not valid UTF-8.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,10 +140,10 @@ pub struct DimensionTotals {
 impl DimensionTotals {
     pub fn of(d: &DimensionReport) -> Self {
         DimensionTotals {
-            before: d.size.region + d.size.entities + d.size.poi,
+            before: d.size.total(),
             chunks: d.chunks.total,
             delete: d.gc.delete,
-            after: d.gc.size_after.region + d.gc.size_after.entities + d.gc.size_after.poi,
+            after: d.gc.size_after.total(),
             lists: ListCounts {
                 integrity: (d.integrity.structural.len() + d.integrity.content.len()) as u64,
                 empty_files: d.empty_files.len() as u64,
@@ -285,12 +285,8 @@ pub struct DimensionReport {
     pub boundary_warnings: Vec<BoundaryJson>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
-pub struct KindBytes {
-    pub region: u64,
-    pub entities: u64,
-    pub poi: u64,
-}
+/// Bytes of each kind of region-format file.
+pub type KindBytes = PerKind<u64>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct ChunkCounts {
@@ -472,11 +468,7 @@ fn dimension_report<P>(
     let mut gc = GcSummary {
         delete: 0,
         protected: Protected::default(),
-        size_after: KindBytes {
-            region: sizes.region.after,
-            entities: sizes.entities.after,
-            poi: sizes.poi.after,
-        },
+        size_after: sizes.map(|s| s.after),
         emptied_files: Vec::new(),
     };
     let mut integrity = Integrity {
@@ -561,11 +553,7 @@ fn dimension_report<P>(
     Ok(DimensionReport {
         id: dim.dimension.id.to_string(),
         dir: rel(&dim.dimension.dir)?,
-        size: KindBytes {
-            region: sizes.region.before,
-            entities: sizes.entities.before,
-            poi: sizes.poi.before,
-        },
+        size: sizes.map(|s| s.before),
         chunks,
         inhabited_time: buckets,
         gc,

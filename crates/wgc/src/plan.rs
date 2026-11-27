@@ -11,7 +11,7 @@ use wgc_core::plan::{
 };
 use wgc_core::source::WorldSource;
 use wgc_core::trust::{ChunkKey, InhabitedMap, TrustReport, check_trust_before_plan};
-use wgc_core::types::{ChunkPos, DimensionId, FileKind, Known, UnknownReason};
+use wgc_core::types::{ChunkPos, DimensionId, Known, PerKind, UnknownReason};
 
 use crate::host::{PathOf, Runner, World};
 use crate::observe::{Observer, Progress, Warning};
@@ -57,7 +57,7 @@ pub fn build_plan<W: World>(
     let mut protection_unknown = BTreeSet::new();
     let mut finished = 0;
     for (dim, files) in &listed {
-        let externals = FileKind::ALL.map(|kind| group_externals(files, kind));
+        let externals = PerKind::from_fn(|kind| group_externals(files, kind));
         let analyses = runner.try_map(
             &files.triples,
             |triple| {

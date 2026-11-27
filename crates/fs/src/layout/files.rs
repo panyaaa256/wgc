@@ -34,12 +34,12 @@ pub fn list_dimension_files(dim: &Dimension) -> Result<DimensionFiles, LayoutErr
                     continue;
                 }
                 let triple = triples.entry(pos).or_insert_with(|| TripleFiles::new(pos));
-                insert_unique(triple.slot(kind), path)?;
+                insert_unique(&mut triple.files[kind], path)?;
             } else if let Some(pos) = parse_external_name(&name) {
                 if !path.is_file() {
                     continue;
                 }
-                let map = files.externals_mut(kind);
+                let map = &mut files.externals[kind];
                 if let Some(first) = map.get(&pos) {
                     return Err(LayoutError::AmbiguousRegion {
                         first: first.clone(),
@@ -104,8 +104,9 @@ mod tests {
             ]
         );
         let origin = &files.triples[1];
-        assert!(origin.region.is_some() && origin.entities.is_some() && origin.poi.is_none());
-        let externals: Vec<ChunkPos> = files.externals(FileKind::Region).keys().copied().collect();
+        let present = origin.files.as_ref().map(Option::is_some);
+        assert_eq!(present.into_iter().collect::<Vec<_>>(), [true, true, false]);
+        let externals: Vec<ChunkPos> = files.externals.region.keys().copied().collect();
         assert_eq!(externals, [ChunkPos::new(-1, 3)]);
     }
 

@@ -11,7 +11,9 @@ use alloc::vec::Vec;
 
 use crate::layout::{Dimension, WorldLayout};
 use crate::region::{ContentError, HEADER_BYTES, SECTOR_BYTES, StructuralIssue, packed_sectors};
-use crate::types::{ChunkIndex, ChunkPos, DataVersion, DimensionId, FileKind, Known, RegionPos};
+use crate::types::{
+    ChunkIndex, ChunkPos, DataVersion, DimensionId, FileKind, Known, PerKind, RegionPos,
+};
 
 pub use build::{
     Analysis, Externals, PlayerFiles, analyze_triple, decide, estimate, forceload_protection,
@@ -135,9 +137,7 @@ pub struct TriplePlan<P> {
     pub pos: RegionPos,
     /// Not empty means the whole triple is copied verbatim.
     pub issues: Vec<StructuralIssue>,
-    pub region: Option<FileInfo<P>>,
-    pub entities: Option<FileInfo<P>>,
-    pub poi: Option<FileInfo<P>>,
+    pub files: PerKind<Option<FileInfo<P>>>,
     /// Chunks of the region file, sorted by index.
     pub chunks: Vec<ChunkDecision>,
 }
@@ -147,12 +147,8 @@ impl<P> TriplePlan<P> {
         !self.issues.is_empty()
     }
 
-    pub const fn file(&self, kind: FileKind) -> Option<&FileInfo<P>> {
-        match kind {
-            FileKind::Region => self.region.as_ref(),
-            FileKind::Entities => self.entities.as_ref(),
-            FileKind::Poi => self.poi.as_ref(),
-        }
+    pub fn file(&self, kind: FileKind) -> Option<&FileInfo<P>> {
+        self.files[kind].as_ref()
     }
 
     fn region_decision(&self, index: ChunkIndex) -> Option<Decision> {
@@ -283,12 +279,7 @@ impl core::ops::AddAssign for Sizes {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct KindSizes {
-    pub region: Sizes,
-    pub entities: Sizes,
-    pub poi: Sizes,
-}
+pub type KindSizes = PerKind<Sizes>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Estimate {

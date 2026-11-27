@@ -200,6 +200,94 @@ impl FileKind {
     }
 }
 
+/// One value for each file of a region triple, indexed by [`FileKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, serde::Serialize)]
+pub struct PerKind<T> {
+    pub region: T,
+    pub entities: T,
+    pub poi: T,
+}
+
+impl<T> PerKind<T> {
+    /// The value of each kind, computed by `f`.
+    pub fn from_fn(mut f: impl FnMut(FileKind) -> T) -> Self {
+        Self {
+            region: f(FileKind::Region),
+            entities: f(FileKind::Entities),
+            poi: f(FileKind::Poi),
+        }
+    }
+
+    pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> PerKind<U> {
+        PerKind {
+            region: f(self.region),
+            entities: f(self.entities),
+            poi: f(self.poi),
+        }
+    }
+
+    pub const fn as_ref(&self) -> PerKind<&T> {
+        PerKind {
+            region: &self.region,
+            entities: &self.entities,
+            poi: &self.poi,
+        }
+    }
+
+    /// The values in [`FileKind::ALL`] order, with their kind.
+    pub fn iter(&self) -> impl Iterator<Item = (FileKind, &T)> {
+        FileKind::ALL.into_iter().zip(self.as_ref())
+    }
+
+    /// The sum of the three values.
+    pub fn total(self) -> T
+    where
+        T: core::ops::Add<Output = T>,
+    {
+        self.region + self.entities + self.poi
+    }
+}
+
+impl<T> IntoIterator for PerKind<T> {
+    type Item = T;
+    type IntoIter = core::array::IntoIter<T, 3>;
+
+    /// The values in [`FileKind::ALL`] order.
+    fn into_iter(self) -> Self::IntoIter {
+        [self.region, self.entities, self.poi].into_iter()
+    }
+}
+
+impl<T> core::ops::Index<FileKind> for PerKind<T> {
+    type Output = T;
+
+    fn index(&self, kind: FileKind) -> &T {
+        match kind {
+            FileKind::Region => &self.region,
+            FileKind::Entities => &self.entities,
+            FileKind::Poi => &self.poi,
+        }
+    }
+}
+
+impl<T> core::ops::IndexMut<FileKind> for PerKind<T> {
+    fn index_mut(&mut self, kind: FileKind) -> &mut T {
+        match kind {
+            FileKind::Region => &mut self.region,
+            FileKind::Entities => &mut self.entities,
+            FileKind::Poi => &mut self.poi,
+        }
+    }
+}
+
+impl<T: core::ops::AddAssign> core::ops::AddAssign for PerKind<T> {
+    fn add_assign(&mut self, o: Self) {
+        self.region += o.region;
+        self.entities += o.entities;
+        self.poi += o.poi;
+    }
+}
+
 /// A stop that `--force` can continue past, shown to users as `T-1`..`T-5`
 /// and `L-1`.
 ///
