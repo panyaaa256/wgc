@@ -1,6 +1,5 @@
 //! Building the parts of a [`Plan`] from the world's files.
 
-use alloc::borrow::ToOwned;
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::format;
 use alloc::vec::Vec;
@@ -342,19 +341,20 @@ pub fn player_files<S: WorldSource>(
     let mut omitted = Vec::new();
     let mut dat_old = Vec::new();
     for entry in source.list(&dir)? {
-        let Some(name) = source.name(&entry.path).map(str::to_owned) else {
-            continue;
-        };
         if !entry.is_file {
             continue;
         }
-        if is_player_temp_file(&name) {
+        let Some(name) = source.name(&entry.path) else {
+            continue;
+        };
+        if is_player_temp_file(name) {
             omitted.push(OmittedFile {
                 path: entry.path,
                 reason: OmitReason::PlayerTempFile,
             });
-        } else if let Some(stem) = name.strip_suffix(".dat_old")
-            && !source.exists(&source.join(&dir, &format!("{stem}.dat")))
+        } else if name
+            .strip_suffix(".dat_old")
+            .is_some_and(|stem| !source.exists(&source.join(&dir, &format!("{stem}.dat"))))
         {
             dat_old.push(entry.path);
         }

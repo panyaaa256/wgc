@@ -25,7 +25,7 @@ pub fn list_dimension_files(dim: &Dimension) -> Result<DimensionFiles, LayoutErr
         let mut entries = read_dir_opt(&dir)?;
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            let Some(name) = entry.file_name().into_string().ok() else {
                 continue;
             };
             let path = entry.path();

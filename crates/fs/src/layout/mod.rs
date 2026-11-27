@@ -195,7 +195,7 @@ fn bukkit_bases(root: &Path) -> Result<Vec<String>, LayoutError> {
     let mut bases = Vec::new();
     for entry in read_dir_opt(root)? {
         let path = entry.path();
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+        let Some(name) = entry.file_name().into_string().ok() else {
             continue;
         };
         if !path.is_dir() || matches!(name.as_str(), "dimensions" | "DIM-1" | "DIM1") {
@@ -302,7 +302,7 @@ fn collect_dimensions(
         }
         Shape::BukkitLegacy { base } => {
             for entry in read_dir_opt(root)? {
-                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                let Some(name) = entry.file_name().into_string().ok() else {
                     continue;
                 };
                 let Some(suffix) = name.strip_prefix(&format!("{base}_")) else {
@@ -359,10 +359,8 @@ fn collect_tree(
             if !name.path().is_dir() {
                 continue;
             }
-            let (Some(n), Some(m)) = (
-                ns.file_name().to_str().map(str::to_owned),
-                name.file_name().to_str().map(str::to_owned),
-            ) else {
+            let (ns_name, dim_name) = (ns.file_name(), name.file_name());
+            let (Some(n), Some(m)) = (ns_name.to_str(), dim_name.to_str()) else {
                 continue;
             };
             // Directory names that are not valid IDs are not dimensions the game loads.
