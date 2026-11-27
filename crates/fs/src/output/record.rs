@@ -206,28 +206,12 @@ pub(crate) fn write_records(
     fs::create_dir_all(&dir).map_err(io_err(&dir))?;
     write_json(&dir.join("source-state.json"), state)?;
 
-    let mut summary = Summary {
-        deleted_chunks: 0,
-        size_before: 0,
-        size_after: 0,
+    let sizes = plan.estimate.total_sizes();
+    let summary = Summary {
+        deleted_chunks: plan.deleted_chunks(),
+        size_before: sizes.before,
+        size_after: sizes.after,
     };
-    for dim in &plan.dimensions {
-        for t in &dim.triples {
-            summary.deleted_chunks += t
-                .chunks
-                .iter()
-                .filter(|c| c.decision == crate::plan::Decision::Delete)
-                .count() as u64;
-        }
-    }
-    for sizes in plan.estimate.dimensions.values() {
-        for s in *sizes {
-            summary.size_before += s.before;
-            summary.size_after += s.after;
-        }
-    }
-    summary.size_before += plan.estimate.other_files_bytes;
-    summary.size_after += plan.estimate.other_files_bytes;
 
     // Everything else is durable before the marker appears.
     sync_dir(&dir)?;

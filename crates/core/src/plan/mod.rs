@@ -302,6 +302,23 @@ pub struct Estimate {
     pub total_output_bytes: u64,
 }
 
+impl Estimate {
+    /// Bytes of every file now and after GC, including the files outside the
+    /// region folders.
+    pub fn total_sizes(&self) -> Sizes {
+        let mut total = Sizes {
+            before: self.other_files_bytes,
+            after: self.other_files_bytes,
+        };
+        for sizes in self.dimensions.values() {
+            for s in *sizes {
+                total += s;
+            }
+        }
+        total
+    }
+}
+
 /// The plan for a whole world.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan<P> {
@@ -318,6 +335,16 @@ pub struct Plan<P> {
 }
 
 impl<P> Plan<P> {
+    /// Chunks GC deletes, in all dimensions.
+    pub fn deleted_chunks(&self) -> u64 {
+        self.dimensions
+            .iter()
+            .flat_map(|d| &d.triples)
+            .flat_map(|t| &t.chunks)
+            .filter(|c| c.decision == Decision::Delete)
+            .count() as u64
+    }
+
     /// Whether GC deletes chunks in `dim`.
     pub fn is_targeted(&self, dim: &DimensionId) -> bool {
         is_targeted(self.gc_dims.as_ref(), dim)
