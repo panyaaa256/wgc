@@ -19,5 +19,7 @@ serde.workspace = true
 flate2.workspace = true
 
 [features]
+# On a host with std: pick the fastest CRC-32 code for the CPU at run time.
+std = ["crc32fast/std"]
 # Builders for synthetic region files and NBT, for the tests of dependent crates.
 test-util = []

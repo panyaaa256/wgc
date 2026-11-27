@@ -68,7 +68,8 @@ path type.
 - `trust`: the trust checks T-1..T-5.
 - `report`: turning a plan and trust results into the JSON reports.
 
-The `test-util` feature exposes builders for synthetic region files and NBT to
+The `std` feature lets the host pick the fastest CRC-32 code for its CPU at
+run time; `wgc-fs` turns it on. The `test-util` feature exposes builders for synthetic region files and NBT to
 the tests of the other crates.
 
 ### `crates/wgc`

@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 wgc.workspace = true
-wgc-core.workspace = true
+wgc-core = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
 rayon.workspace = true
 yaml-rust2.workspace = true
