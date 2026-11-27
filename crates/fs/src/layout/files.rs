@@ -1,76 +1,17 @@
 //! Enumerating region triples.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use super::{Dimension, LayoutError, read_dir_opt};
 use crate::region::{parse_external_name, parse_region_name};
-use crate::types::{ChunkPos, FileKind, RegionPos};
+use crate::types::{FileKind, RegionPos};
 
 /// The files of one region triple. Each kind may be missing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TripleFiles {
-    pub pos: RegionPos,
-    pub region: Option<PathBuf>,
-    pub entities: Option<PathBuf>,
-    pub poi: Option<PathBuf>,
-}
-
-impl TripleFiles {
-    pub fn get(&self, kind: FileKind) -> Option<&Path> {
-        match kind {
-            FileKind::Region => self.region.as_deref(),
-            FileKind::Entities => self.entities.as_deref(),
-            FileKind::Poi => self.poi.as_deref(),
-        }
-    }
-
-    fn slot(&mut self, kind: FileKind) -> &mut Option<PathBuf> {
-        match kind {
-            FileKind::Region => &mut self.region,
-            FileKind::Entities => &mut self.entities,
-            FileKind::Poi => &mut self.poi,
-        }
-    }
-}
+pub type TripleFiles = wgc_core::layout::TripleFiles<PathBuf>;
 
 /// The region triples and external chunk files of one dimension.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct DimensionFiles {
-    /// Sorted by position.
-    pub triples: Vec<TripleFiles>,
-    pub region_externals: BTreeMap<ChunkPos, PathBuf>,
-    pub entities_externals: BTreeMap<ChunkPos, PathBuf>,
-    pub poi_externals: BTreeMap<ChunkPos, PathBuf>,
-}
-
-impl DimensionFiles {
-    /// External `.mcc` files of `kind`.
-    pub fn externals(&self, kind: FileKind) -> &BTreeMap<ChunkPos, PathBuf> {
-        match kind {
-            FileKind::Region => &self.region_externals,
-            FileKind::Entities => &self.entities_externals,
-            FileKind::Poi => &self.poi_externals,
-        }
-    }
-
-    /// Chunks with an external file of `kind`, grouped by region.
-    pub fn externals_by_region(&self, kind: FileKind) -> BTreeMap<RegionPos, BTreeSet<ChunkPos>> {
-        let mut map: BTreeMap<RegionPos, BTreeSet<ChunkPos>> = BTreeMap::new();
-        for pos in self.externals(kind).keys() {
-            map.entry(pos.region()).or_default().insert(*pos);
-        }
-        map
-    }
-
-    fn externals_mut(&mut self, kind: FileKind) -> &mut BTreeMap<ChunkPos, PathBuf> {
-        match kind {
-            FileKind::Region => &mut self.region_externals,
-            FileKind::Entities => &mut self.entities_externals,
-            FileKind::Poi => &mut self.poi_externals,
-        }
-    }
-}
+pub type DimensionFiles = wgc_core::layout::DimensionFiles<PathBuf>;
 
 /// Lists the region triples of `dim`.
 ///
@@ -92,12 +33,7 @@ pub fn list_dimension_files(dim: &Dimension) -> Result<DimensionFiles, LayoutErr
                 if !path.is_file() {
                     continue;
                 }
-                let triple = triples.entry(pos).or_insert_with(|| TripleFiles {
-                    pos,
-                    region: None,
-                    entities: None,
-                    poi: None,
-                });
+                let triple = triples.entry(pos).or_insert_with(|| TripleFiles::new(pos));
                 insert_unique(triple.slot(kind), path)?;
             } else if let Some(pos) = parse_external_name(&name) {
                 if !path.is_file() {
@@ -132,8 +68,11 @@ fn insert_unique(slot: &mut Option<PathBuf>, path: PathBuf) -> Result<(), Layout
 #[cfg(test)]
 mod tests {
     use super::super::test_util::*;
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
     use super::*;
-    use crate::types::DimensionId;
+    use crate::types::{ChunkPos, DimensionId};
 
     fn dimension(dir: &Path) -> Dimension {
         Dimension {

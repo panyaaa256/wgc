@@ -10,6 +10,7 @@ pub mod lock;
 pub mod output;
 pub mod plan;
 pub mod report;
+pub mod source;
 mod sys;
 pub mod trust;
 pub mod types;

@@ -6,6 +6,8 @@ use super::*;
 use crate::layout::test_util::{gzip, write};
 use crate::lock::SessionLock;
 use crate::nbt::test_util::{V, doc};
+use crate::plan::Inhabited;
+use crate::region::StructuralId;
 use crate::region::test_util::{build, chunk};
 use crate::types::NoopObserver;
 

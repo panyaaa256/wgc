@@ -6,10 +6,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::{Dimension, LayoutError, LayoutKind, WorldLayout};
-use crate::nbt::{self, LevelInfo, NbtError, RuleValue};
-use crate::types::{ChunkPos, Known, UnknownReason};
-use crate::versions::{DV_FILES_26_1, DV_MAX_KNOWN};
+use super::{Dimension, LayoutError, WorldLayout};
+use crate::nbt::{self, LevelInfo};
+use crate::source::FsSource;
+use crate::types::{ChunkPos, Known};
 
 pub(super) fn read_level_dat(world_folder: &Path) -> Result<LevelInfo, LayoutError> {
     let path = world_folder.join("level.dat");
@@ -25,131 +25,31 @@ pub(super) fn read_level_dat(world_folder: &Path) -> Result<LevelInfo, LayoutErr
         .map_err(|source| LayoutError::UnreadableLevelDat { path, source })
 }
 
-/// Reads a gzip NBT file; `Ok(None)` if it does not exist.
-fn read_optional<T>(
-    path: &Path,
-    parse: impl FnOnce(&[u8]) -> Result<T, NbtError>,
-) -> Result<Option<T>, UnknownReason> {
-    let unreadable = || UnknownReason::UnreadableFile {
-        path: path.to_path_buf(),
-    };
-    match fs::read(path) {
-        Ok(bytes) => nbt::gunzip(&bytes)
-            .and_then(|nbt| parse(&nbt))
-            .map(Some)
-            .map_err(|_| unreadable()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(_) => Err(unreadable()),
-    }
-}
-
-fn known_version(layout: &WorldLayout) -> Result<(), UnknownReason> {
-    match layout.data_version {
-        Some(v) if v > DV_MAX_KNOWN => Err(UnknownReason::UnknownVersion(v)),
-        _ => Ok(()),
-    }
-}
-
-fn files_26_1(layout: &WorldLayout) -> bool {
-    layout.data_version.is_some_and(|v| v >= DV_FILES_26_1)
-}
-
 /// Whether mob spawning is enabled for `dim` (game rule `spawn_mobs`, formerly `doMobSpawning`).
 ///
 /// A rule that is not stored has its default value, enabled.
 pub fn spawn_mobs(layout: &WorldLayout, dim: &Dimension) -> Known<bool> {
-    Known::from((|| {
-        known_version(layout)?;
-        let (path, value) = match layout.kind {
-            LayoutKind::Bukkit => {
-                let path = dim.dir.join("data/minecraft/game_rules.dat");
-                let value = read_optional(&path, nbt::read_game_rules_file)?;
-                (path, value.unwrap_or(RuleValue::Absent))
-            }
-            LayoutKind::BukkitLegacy if dim.world_folder != layout.main_world_folder => {
-                level_rule(&dim.world_folder)?
-            }
-            LayoutKind::BukkitLegacy => main_level_rule(layout),
-            LayoutKind::Vanilla | LayoutKind::VanillaLegacy if files_26_1(layout) => {
-                let path = layout
-                    .main_world_folder
-                    .join("data/minecraft/game_rules.dat");
-                let value = read_optional(&path, nbt::read_game_rules_file)?;
-                (path, value.unwrap_or(RuleValue::Absent))
-            }
-            LayoutKind::Vanilla | LayoutKind::VanillaLegacy => main_level_rule(layout),
-        };
-        match value {
-            RuleValue::Absent => Ok(true),
-            RuleValue::Value(v) => Ok(v),
-            RuleValue::Unreadable => Err(UnknownReason::UnexpectedValue {
-                path,
-                key: "spawn_mobs".to_owned(),
-            }),
-        }
-    })())
-}
-
-/// The rule from the main `level.dat`, already read by [`super::detect`].
-fn main_level_rule(layout: &WorldLayout) -> (PathBuf, RuleValue) {
-    (
-        layout.main_world_folder.join("level.dat"),
-        layout.level_spawn_mobs,
-    )
-}
-
-fn level_rule(world_folder: &Path) -> Result<(PathBuf, RuleValue), UnknownReason> {
-    let path = world_folder.join("level.dat");
-    match read_optional(&path, nbt::read_level_info)? {
-        Some(info) => Ok((path, info.spawn_mobs)),
-        None => Err(UnknownReason::UnreadableFile { path }),
-    }
+    wgc_core::layout::spawn_mobs(&FsSource, layout, dim)
 }
 
 /// The `/forceload` chunks of `dim`.
 pub fn forced_chunks(layout: &WorldLayout, dim: &Dimension) -> Known<BTreeSet<ChunkPos>> {
-    Known::from((|| {
-        known_version(layout)?;
-        let new = dim.dir.join("data/minecraft/chunk_tickets.dat");
-        let old = dim.dir.join("data/chunks.dat");
-        let candidates = if files_26_1(layout) {
-            [new, old]
-        } else {
-            [old, new]
-        };
-        for path in candidates {
-            if let Some(chunks) = read_optional(&path, nbt::read_forced_chunks)? {
-                return Ok(chunks);
-            }
-        }
-        Ok(BTreeSet::new())
-    })())
+    wgc_core::layout::forced_chunks(&FsSource, layout, dim)
 }
 
 /// The folder that holds `<uuid>.dat` player files.
 pub fn player_data_dir(layout: &WorldLayout) -> PathBuf {
-    if files_26_1(layout) {
-        layout.main_world_folder.join("players/data")
-    } else {
-        layout.main_world_folder.join("playerdata")
-    }
+    wgc_core::layout::player_data_dir(&FsSource, layout)
 }
 
 /// `paper-world.yml` for `dim` (Bukkit layouts only).
 pub fn paper_world_config(layout: &WorldLayout, dim: &Dimension) -> Option<PathBuf> {
-    match layout.kind {
-        LayoutKind::BukkitLegacy => Some(dim.world_folder.join("paper-world.yml")),
-        LayoutKind::Bukkit => Some(dim.dir.join("paper-world.yml")),
-        LayoutKind::Vanilla | LayoutKind::VanillaLegacy => None,
-    }
+    wgc_core::layout::paper_world_config(&FsSource, layout, dim)
 }
 
 /// `config/paper-world-defaults.yml` of the server (Bukkit layouts only).
 pub fn paper_defaults_config(layout: &WorldLayout) -> Option<PathBuf> {
-    layout
-        .server_root
-        .as_ref()
-        .map(|root| root.join("config/paper-world-defaults.yml"))
+    wgc_core::layout::paper_defaults_config(&FsSource, layout)
 }
 
 #[cfg(test)]
@@ -158,7 +58,8 @@ mod tests {
     use super::super::test_util::*;
     use super::*;
     use crate::nbt::test_util::{V, doc, pack};
-    use crate::types::DimensionId;
+    use crate::types::{DimensionId, UnknownReason};
+    use crate::versions::DV_MAX_KNOWN;
 
     fn level(world: &Path, entries: Vec<(&'static str, V)>) {
         write(

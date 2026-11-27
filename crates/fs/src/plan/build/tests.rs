@@ -6,7 +6,7 @@ use super::*;
 use crate::layout::test_util::{gzip, level_dat, write};
 use crate::nbt::test_util::{V, doc, pack};
 use crate::region::test_util::{Chunk, build, chunk};
-use crate::types::NoopObserver;
+use crate::types::{ChunkIndex, DimensionId, NoopObserver};
 
 fn zlib(bytes: &[u8]) -> Vec<u8> {
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -289,25 +289,6 @@ fn empty_files_and_player_temp_files_are_omitted() {
         [std::ffi::OsString::from(format!("{uuid}-123.dat"))]
     );
     assert_eq!(p.dat_old_without_dat.len(), 1);
-}
-
-#[test]
-fn player_temp_file_pattern() {
-    assert!(is_player_temp_file(
-        "0123abcd-0000-0000-0000-00000000beef-1.dat"
-    ));
-    assert!(!is_player_temp_file(
-        "0123abcd-0000-0000-0000-00000000beef.dat"
-    ));
-    assert!(!is_player_temp_file(
-        "0123ABCD-0000-0000-0000-00000000beef-1.dat"
-    ));
-    assert!(!is_player_temp_file(
-        "0123abcd-0000-0000-0000-00000000beef-.dat"
-    ));
-    assert!(!is_player_temp_file(
-        "0123abcd-0000-0000-0000-00000000beef-1.dat_old"
-    ));
 }
 
 #[test]

@@ -1,36 +1,15 @@
 //! The shared value types, plus results that may be unknown and the channel
 //! through which long operations report progress and warnings.
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 pub use wgc_core::types::*;
 
 /// A value that was read, or why it could not be confirmed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Known<T> {
-    Value(T),
-    Unknown(UnknownReason),
-}
-
-impl<T> From<Result<T, UnknownReason>> for Known<T> {
-    fn from(result: Result<T, UnknownReason>) -> Self {
-        match result {
-            Ok(v) => Known::Value(v),
-            Err(reason) => Known::Unknown(reason),
-        }
-    }
-}
+pub type Known<T> = wgc_core::types::Known<T, PathBuf>;
 
 /// Why something, such as a trust check, could not be confirmed.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum UnknownReason {
-    UnreadableFile { path: PathBuf },
-    UnexpectedValue { path: PathBuf, key: String },
-    UnknownVersion(DataVersion),
-    NoPlayersChecked,
-    ForcedChunksUnknown(BTreeSet<DimensionId>),
-}
+pub type UnknownReason = wgc_core::types::UnknownReason<PathBuf>;
 
 /// Receives progress and warnings from long-running operations.
 /// This crate never prints; the CLI implements this.

@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
 
@@ -6,7 +7,8 @@ use crate::layout::test_util::{gzip, write};
 use crate::nbt::test_util::{V, doc};
 use crate::plan::{PlanOptions, build_plan};
 use crate::region::test_util::{build, chunk};
-use crate::types::NoopObserver;
+use crate::types::{GuardId, NoopObserver};
+use crate::versions::DV_MAX_KNOWN;
 
 fn zlib(bytes: &[u8]) -> Vec<u8> {
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -417,11 +419,4 @@ fn t3_before_the_plan_reads_external_chunks() {
     let early = check_trust_before_plan(&layout, None, false);
     assert_eq!(early, report(t.path(), PlanOptions::default()));
     assert!(matches!(status(&early, GuardId::T3), CheckStatus::Fail(_)));
-}
-
-#[test]
-fn block_to_chunk_floors() {
-    assert_eq!(block_to_chunk(-0.5, 15.9), Some(ChunkPos::new(-1, 0)));
-    assert_eq!(block_to_chunk(16.0, -16.0), Some(ChunkPos::new(1, -1)));
-    assert_eq!(block_to_chunk(f64::NAN, 0.0), None);
 }

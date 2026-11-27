@@ -1,6 +1,7 @@
 //! Basic types shared by every module.
 
 use alloc::borrow::ToOwned;
+use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::String;
 use core::fmt;
@@ -268,6 +269,32 @@ impl FromStr for GuardId {
             .find(|id| id.as_str() == s)
             .ok_or_else(|| GuardIdError(s.to_owned()))
     }
+}
+
+/// A value that was read, or why it could not be confirmed. `P` names files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Known<T, P> {
+    Value(T),
+    Unknown(UnknownReason<P>),
+}
+
+impl<T, P> From<Result<T, UnknownReason<P>>> for Known<T, P> {
+    fn from(result: Result<T, UnknownReason<P>>) -> Self {
+        match result {
+            Ok(v) => Known::Value(v),
+            Err(reason) => Known::Unknown(reason),
+        }
+    }
+}
+
+/// Why something, such as a trust check, could not be confirmed. `P` names files.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UnknownReason<P> {
+    UnreadableFile { path: P },
+    UnexpectedValue { path: P, key: String },
+    UnknownVersion(DataVersion),
+    NoPlayersChecked,
+    ForcedChunksUnknown(BTreeSet<DimensionId>),
 }
 
 #[cfg(test)]
