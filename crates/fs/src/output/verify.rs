@@ -15,7 +15,7 @@ use crate::layout::WorldFiles;
 use crate::lock::{LockError, SessionLock};
 use crate::plan::{ExternalAction, FileAction, Plan};
 use crate::region::RegionFile;
-use crate::types::{Observer, Progress};
+use crate::types::{Observer, Progress, Warning};
 
 /// Checks V-1..V-6. All failures are collected.
 pub(crate) fn check_output(
@@ -24,7 +24,7 @@ pub(crate) fn check_output(
     written: &Written,
     out: &Path,
     state: &SourceState,
-    observer: &dyn Observer,
+    observer: &dyn Observer<Warning>,
     cancel: &AtomicBool,
 ) -> Result<(), OutputError> {
     // Counting and reporting under one lock keeps `done` increasing for the observer.

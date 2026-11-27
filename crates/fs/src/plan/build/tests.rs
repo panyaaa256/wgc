@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -6,7 +7,7 @@ use super::*;
 use crate::layout::test_util::{gzip, level_dat, write};
 use crate::nbt::test_util::{V, doc, pack};
 use crate::region::test_util::{Chunk, build, chunk};
-use crate::types::{ChunkIndex, DimensionId, NoopObserver};
+use crate::types::{ChunkIndex, ChunkPos, DimensionId, FileKind, NoopObserver};
 
 fn zlib(bytes: &[u8]) -> Vec<u8> {
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());

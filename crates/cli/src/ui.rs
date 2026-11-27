@@ -137,7 +137,7 @@ impl Terminal {
     }
 }
 
-impl Observer for Terminal {
+impl Observer<Warning> for Terminal {
     fn progress(&self, p: Progress) {
         if !self.show_progress {
             return;

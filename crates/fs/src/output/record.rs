@@ -77,22 +77,7 @@ pub enum ChangedFile {
     Modified(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Stage {
-    Write,
-    Verify,
-    Record,
-}
-
-impl Stage {
-    fn as_str(self) -> &'static str {
-        match self {
-            Stage::Write => "write",
-            Stage::Verify => "verify",
-            Stage::Record => "record",
-        }
-    }
-}
+pub(crate) use wgc::gc::Stage;
 
 fn report_err(e: ReportError) -> OutputError {
     match e {

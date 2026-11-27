@@ -9,10 +9,11 @@ use std::sync::atomic::AtomicBool;
 pub use wgc_core::report::*;
 
 use crate::layout::WorldLayout;
-use crate::lock::{LockError, SessionLocks};
-use crate::plan::{Plan, PlanError, PlanOptions, build_plan};
-use crate::trust::{TrustReport, check_trust};
+use crate::lock::SessionLocks;
+use crate::plan::{Plan, PlanError};
+use crate::trust::TrustReport;
 use crate::types::{GuardId, Observer, Warning};
+use crate::world::{FsWorld, Rayon};
 
 /// Why a report could not be produced.
 #[derive(Debug, thiserror::Error)]
@@ -29,43 +30,31 @@ impl From<NonUtf8Path<PathBuf>> for ReportError {
     }
 }
 
-fn lock_status(result: &Result<SessionLocks, LockError>) -> LockStatus {
-    match result {
-        Ok(_) => LockStatus::Acquired,
-        Err(LockError::InUse { .. } | LockError::HeldByThisProcess { .. }) => LockStatus::InUse,
-        Err(LockError::Missing { .. }) => LockStatus::Missing,
-        Err(LockError::NotWritable { .. }) => LockStatus::NotWritable,
-        Err(LockError::Io { .. }) => LockStatus::Error,
-    }
-}
-
 /// Locks the world for a read-only report if possible; otherwise warns
 /// ([`Warning::LockUnavailable`]) and continues. Keep the returned locks alive while reading.
 pub fn try_lock_for_report(
     layout: &WorldLayout,
-    observer: &dyn Observer,
+    observer: &dyn Observer<Warning>,
 ) -> (LockStatus, Option<SessionLocks>) {
-    let locks = SessionLocks::try_acquire_all(layout);
-    let lock = lock_status(&locks);
-    match locks {
-        Ok(held) => (lock, Some(held)),
-        Err(e) => {
-            observer.warn(Warning::LockUnavailable(e));
-            (lock, None)
-        }
-    }
+    wgc::scan::try_lock_for_report(&FsWorld::new(layout), observer)
 }
 
 /// Runs `wgc scan`: locks if possible, plans every dimension and checks trust.
 pub fn run_scan(
     layout: &WorldLayout,
-    observer: &dyn Observer,
+    observer: &dyn Observer<Warning>,
     cancel: &AtomicBool,
 ) -> Result<ScanReport, ReportError> {
-    let (lock, _held) = try_lock_for_report(layout, observer);
-    let plan = build_plan(layout, &PlanOptions::default(), observer, cancel)?;
-    let trust = check_trust(&plan);
-    scan_report(&plan, &trust, lock)
+    wgc::scan::run_scan(&FsWorld::new(layout), &Rayon, observer, cancel).map_err(ReportError::from)
+}
+
+impl From<wgc::scan::ReportError<PlanError, PathBuf>> for ReportError {
+    fn from(e: wgc::scan::ReportError<PlanError, PathBuf>) -> Self {
+        match e {
+            wgc::scan::ReportError::Plan(e) => ReportError::Plan(e.into()),
+            wgc::scan::ReportError::NonUtf8Path(path) => ReportError::NonUtf8Path(path),
+        }
+    }
 }
 
 /// Builds the scan report for a plan made without `--dimension`.
@@ -74,10 +63,12 @@ pub fn scan_report(
     trust: &TrustReport,
     lock: LockStatus,
 ) -> Result<ScanReport, ReportError> {
-    let root = &plan.layout.root;
-    Ok(wgc_core::report::scan_report(plan, trust, lock, |p| {
-        rel_path(root, p).ok()
-    })?)
+    Ok(wgc::scan::scan_report(
+        &FsWorld::new(&plan.layout),
+        plan,
+        trust,
+        lock,
+    )?)
 }
 
 /// Turns a scan report into the `wgc gc` report.

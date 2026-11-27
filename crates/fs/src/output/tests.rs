@@ -174,7 +174,7 @@ fn missing_session_lock_is_l1() {
 #[derive(Default)]
 struct ReadCounter(Mutex<u64>);
 
-impl crate::types::Observer for ReadCounter {
+impl crate::types::Observer<Warning> for ReadCounter {
     fn progress(&self, p: Progress) {
         if matches!(p, Progress::Reading { .. }) {
             *self.0.lock().unwrap() += 1;
@@ -205,7 +205,7 @@ fn every_stop_comes_before_reading_the_regions() {
 #[derive(Default)]
 struct EventLog(Mutex<Vec<String>>);
 
-impl crate::types::Observer for EventLog {
+impl crate::types::Observer<Warning> for EventLog {
     fn progress(&self, p: Progress) {
         let mut log = self.0.lock().unwrap();
         if matches!(p, Progress::Reading { .. }) && !log.iter().any(|e| e == "read") {
@@ -266,7 +266,7 @@ struct Hook<F: Fn(&Progress) -> bool + Send + Sync> {
     fired: Mutex<bool>,
 }
 
-impl<F: Fn(&Progress) -> bool + Send + Sync> crate::types::Observer for Hook<F> {
+impl<F: Fn(&Progress) -> bool + Send + Sync> crate::types::Observer<Warning> for Hook<F> {
     fn progress(&self, p: Progress) {
         let mut fired = self.fired.lock().unwrap();
         if !*fired && (self.on)(&p) {

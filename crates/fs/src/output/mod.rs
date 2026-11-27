@@ -3,22 +3,22 @@
 //! The source world is only read. The one exception is opening
 //! `session.lock` for writing to lock it; its content is never changed.
 
-mod copy;
-mod record;
-mod verify;
+pub(crate) mod copy;
+pub(crate) mod record;
+pub(crate) mod verify;
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+
+use wgc::gc::GcError;
 
 use crate::layout::{LayoutError, WorldLayout};
-use crate::lock::{LockError, SessionLock};
-use crate::plan::{Plan, PlanError, PlanOptions, build_plan};
-use crate::trust::{TrustReport, check_trust, check_trust_before_plan};
-use crate::types::{DimensionId, GuardId, Observer, Warning};
-use crate::versions::DV_SESSION_LOCK_OS;
+use crate::lock::LockError;
+use crate::plan::PlanError;
+use crate::types::{GuardId, Observer, Warning};
+use crate::world::{FsWorld, Rayon};
 
 pub use record::{ChangedFile, Complete, Failure, FailureItem, SourceState, SourceStateFile};
 pub use verify::{VerifyError, VerifyOutcome, verify};
@@ -27,30 +27,10 @@ pub use verify::{VerifyError, VerifyOutcome, verify};
 pub const RECORD_DIR: &str = ".wgc";
 
 /// Options for [`run_gc`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GcOptions {
-    /// New or empty output folder.
-    pub out: PathBuf,
-    pub gc_dims: Option<BTreeSet<DimensionId>>,
-    /// Stops that `--force` allows to continue past.
-    pub allowed: BTreeSet<GuardId>,
-}
+pub type GcOptions = wgc::gc::GcOptions<PathBuf>;
 
-/// What a successful `gc --out` did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GcOutcome {
-    pub plan: Plan,
-    pub trust: TrustReport,
-    /// Stops that were ignored with `--force`.
-    pub forced: BTreeSet<GuardId>,
-    /// The output folder, canonicalized.
-    pub out: PathBuf,
-    /// Whether some output files could not get their original owner.
-    pub owner_not_preserved: bool,
-    /// Whether some world folder was not locked because `session.lock` was
-    /// missing and L-1 was forced.
-    pub lock_skipped: bool,
-}
+/// What a successful `gc --out` did. `out` is the output folder, canonicalized.
+pub type GcOutcome = wgc::gc::GcOutcome<PathBuf, PathBuf>;
 
 /// One failed verification check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,149 +98,27 @@ pub(crate) fn io_err(path: &Path) -> impl FnOnce(io::Error) -> OutputError + '_ 
     }
 }
 
-/// Extra space required on top of the estimate.
-const SPACE_MARGIN: u64 = 64 * 1024 * 1024;
-
 /// Runs `gc --out`. Every stop that `--force` did not allow is found before
 /// the output folder is created and before the plan reads every region file.
 pub fn run_gc(
     layout: &WorldLayout,
     options: &GcOptions,
-    observer: &dyn Observer,
+    observer: &dyn Observer<Warning>,
     cancel: &AtomicBool,
 ) -> Result<GcOutcome, OutputError> {
-    // 1. Output folder.
-    let out = check_output(layout, &options.out)?;
-
-    // 2. Locks.
-    let mut forced = BTreeSet::new();
-    let mut stops = BTreeSet::new();
-    let mut locks = Vec::new();
-    let mut folders: Vec<PathBuf> = layout
-        .world_folders
-        .iter()
-        .map(|f| fs::canonicalize(f).unwrap_or_else(|_| f.clone()))
-        .collect();
-    folders.sort();
-    folders.dedup();
-    for folder in &folders {
-        match SessionLock::try_acquire(folder) {
-            Ok(lock) => locks.push(lock),
-            Err(LockError::Missing { .. }) => {
-                stops.insert(GuardId::L1);
-            }
-            Err(e) => return Err(OutputError::Lock(e)),
+    wgc::gc::run_gc(&FsWorld::new(layout), &Rayon, options, observer, cancel).map_err(|e| match e {
+        GcError::Stopped(ids) => OutputError::Stopped(ids),
+        GcError::InsufficientSpace { needed, available } => {
+            OutputError::InsufficientSpace { needed, available }
         }
-    }
-
-    // 3. Trust checks before the long read of step 5, so that every stop
-    // `--force` can continue past is known before it.
-    let skip_t3 = options.allowed.contains(&GuardId::T3);
-    stops.extend(check_trust_before_plan(layout, options.gc_dims.as_ref(), skip_t3).stops());
-    apply_force(stops, &options.allowed, &mut forced, observer)?;
-    if let Some(v) = layout.data_version
-        && v < DV_SESSION_LOCK_OS
-    {
-        observer.warn(Warning::PreLockVersion(v));
-    }
-
-    // 4. Source state, under the lock.
-    let walked = crate::layout::world_files(layout)?;
-    let state = record::SourceState::capture(layout, &walked)?;
-
-    // 5. Plan.
-    let plan = build_plan(
-        layout,
-        &PlanOptions {
-            gc_dims: options.gc_dims.clone(),
-        },
-        observer,
-        cancel,
-    )?;
-
-    // 6. The same checks against the plan. They match step 3 unless a file
-    // changed meanwhile, e.g. under a running game when L-1 was forced.
-    let trust = check_trust(&plan);
-    let new_stops = trust
-        .stops()
-        .into_iter()
-        .filter(|id| !forced.contains(id))
-        .collect();
-    apply_force(new_stops, &options.allowed, &mut forced, observer)?;
-
-    // 7. Free space.
-    let needed = plan
-        .estimate
-        .total_output_bytes
-        .saturating_add(plan.estimate.total_output_bytes / 100)
-        + SPACE_MARGIN;
-    let probe = existing_ancestor(&out);
-    let available = crate::sys::available_space(&probe).map_err(io_err(&probe))?;
-    if needed > available {
-        return Err(OutputError::InsufficientSpace { needed, available });
-    }
-    if cancel.load(Ordering::Relaxed) {
-        return Err(OutputError::Cancelled);
-    }
-
-    // 8-10. Write, verify, record. A failure leaves `failure.json` behind.
-    fs::create_dir_all(&out).map_err(io_err(&out))?;
-    let result = (|| {
-        let written = copy::write_output(&plan, &walked, &out, observer, cancel)
-            .map_err(|e| (record::Stage::Write, e))?;
-        verify::check_output(&plan, &walked, &written, &out, &state, observer, cancel)
-            .map_err(|e| (record::Stage::Verify, e))?;
-        record::write_records(&out, &state, &plan, &forced)
-            .map_err(|e| (record::Stage::Record, e))?;
-        Ok::<_, (record::Stage, OutputError)>(written)
-    })();
-    let written = match result {
-        Ok(written) => written,
-        Err((_, OutputError::Cancelled)) => return Err(OutputError::Cancelled),
-        Err((stage, e)) => {
-            // Best effort: the missing complete.json already marks the output as incomplete.
-            let _ = record::write_failure(&out, stage, &e);
-            return Err(e);
-        }
-    };
-    drop(locks);
-    let lock_skipped = forced.contains(&GuardId::L1);
-    Ok(GcOutcome {
-        lock_skipped,
-        plan,
-        trust,
-        forced,
-        out,
-        owner_not_preserved: written.owner_not_preserved,
+        GcError::Cancelled => OutputError::Cancelled,
+        GcError::Host(e) => e,
     })
-}
-
-/// Stops with every stop that `--force` did not allow. Otherwise records the
-/// allowed ones as forced and warns about each.
-fn apply_force(
-    stops: BTreeSet<GuardId>,
-    allowed: &BTreeSet<GuardId>,
-    forced: &mut BTreeSet<GuardId>,
-    observer: &dyn Observer,
-) -> Result<(), OutputError> {
-    let (ignored, stopping): (BTreeSet<_>, BTreeSet<_>) =
-        stops.into_iter().partition(|id| allowed.contains(id));
-    if !stopping.is_empty() {
-        return Err(OutputError::Stopped(stopping.into_iter().collect()));
-    }
-    for id in ignored {
-        forced.insert(id);
-        observer.warn(match id {
-            GuardId::L1 => Warning::LockSkipped,
-            _ => Warning::Forced(id),
-        });
-    }
-    Ok(())
 }
 
 /// Checks that `out` is new or empty and does not overlap the world.
 /// Returns its absolute form (canonical as far as it exists).
-fn check_output(layout: &WorldLayout, out: &Path) -> Result<PathBuf, OutputError> {
+pub(crate) fn check_output(layout: &WorldLayout, out: &Path) -> Result<PathBuf, OutputError> {
     let (base, rest) = split_existing(out);
     // `..` in a part that does not exist yet would be resolved only when it is
     // created, so the overlap check below could not see where it leads.
@@ -326,7 +184,7 @@ fn split_existing(path: &Path) -> (PathBuf, PathBuf) {
 }
 
 /// The deepest existing ancestor of `path` (or `path` itself).
-fn existing_ancestor(path: &Path) -> PathBuf {
+pub(crate) fn existing_ancestor(path: &Path) -> PathBuf {
     path.ancestors()
         .find(|p| p.exists())
         .map(Path::to_path_buf)

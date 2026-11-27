@@ -9,6 +9,8 @@ publish.workspace = true
 [[bin]]
 name = "wgc"
 path = "src/main.rs"
+# The `wgc` library has the same name; only one of them can have API docs.
+doc = false
 
 [dependencies]
 wgc-fs.workspace = true

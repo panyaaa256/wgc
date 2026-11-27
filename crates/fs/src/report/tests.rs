@@ -6,9 +6,10 @@ use super::*;
 use crate::layout::test_util::{gzip, write};
 use crate::lock::SessionLock;
 use crate::nbt::test_util::{V, doc};
-use crate::plan::Inhabited;
+use crate::plan::{Inhabited, PlanOptions, build_plan};
 use crate::region::StructuralId;
 use crate::region::test_util::{build, chunk};
+use crate::trust::check_trust;
 use crate::types::NoopObserver;
 
 fn zlib(bytes: &[u8]) -> Vec<u8> {
@@ -146,7 +147,7 @@ fn json_is_deterministic() {
 #[test]
 fn lock_unavailable_is_reported() {
     struct Count(std::sync::Mutex<u32>);
-    impl Observer for Count {
+    impl Observer<Warning> for Count {
         fn progress(&self, _: crate::types::Progress) {}
         fn warn(&self, w: Warning) {
             assert!(matches!(w, Warning::LockUnavailable(_)));

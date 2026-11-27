@@ -15,7 +15,6 @@ pub use wgc_core::plan::{
 use crate::layout::LayoutError;
 
 pub use build::build_plan;
-pub(crate) use build::read_inhabited;
 
 /// One region-format file of a triple.
 pub type FileInfo = wgc_core::plan::FileInfo<PathBuf>;
@@ -39,4 +38,13 @@ pub enum PlanError {
     Layout(#[from] LayoutError),
     #[error("cancelled")]
     Cancelled,
+}
+
+impl From<wgc::plan::PlanError<PlanError>> for PlanError {
+    fn from(e: wgc::plan::PlanError<PlanError>) -> Self {
+        match e {
+            wgc::plan::PlanError::World(e) => e,
+            wgc::plan::PlanError::Cancelled => PlanError::Cancelled,
+        }
+    }
 }

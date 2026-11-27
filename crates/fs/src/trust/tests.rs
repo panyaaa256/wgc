@@ -7,7 +7,7 @@ use crate::layout::test_util::{gzip, write};
 use crate::nbt::test_util::{V, doc};
 use crate::plan::{PlanOptions, build_plan};
 use crate::region::test_util::{build, chunk};
-use crate::types::{GuardId, NoopObserver};
+use crate::types::{ChunkPos, GuardId, NoopObserver, UnknownReason};
 use crate::versions::DV_MAX_KNOWN;
 
 fn zlib(bytes: &[u8]) -> Vec<u8> {

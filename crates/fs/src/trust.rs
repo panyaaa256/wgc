@@ -1,16 +1,13 @@
 //! Running the trust checks T-1..T-5 against the files on disk.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use wgc_core::trust::ChunkKey;
-
-pub use wgc_core::trust::InhabitedMap;
-
 use crate::layout::WorldLayout;
-use crate::plan::{Plan, PlanError, read_inhabited};
+use crate::plan::Plan;
 use crate::source::FsSource;
-use crate::types::{ChunkPos, DimensionId, UnknownReason};
+use crate::types::DimensionId;
+use crate::world::FsWorld;
 
 /// Results of the trust checks, in ID order T-1..T-5. Each check is described
 /// on its `GuardId` variant.
@@ -36,37 +33,7 @@ pub fn check_trust_before_plan(
     gc_dims: Option<&BTreeSet<DimensionId>>,
     skip_t3: bool,
 ) -> TrustReport {
-    let inhabited_of =
-        (!skip_t3).then_some(|wanted: &BTreeSet<ChunkKey>| read_inhabited_of(layout, wanted));
-    wgc_core::trust::check_trust_before_plan(&FsSource, layout, gc_dims, inhabited_of)
-}
-
-/// Reads the chunks from the region files, one dimension at a time.
-fn read_inhabited_of(
-    layout: &WorldLayout,
-    wanted: &BTreeSet<ChunkKey>,
-) -> Result<InhabitedMap, UnknownReason> {
-    let mut found = BTreeMap::new();
-    for dim in &layout.dimensions {
-        let chunks: BTreeSet<ChunkPos> = wanted
-            .iter()
-            .filter(|(id, _)| *id == dim.id)
-            .map(|(_, pos)| *pos)
-            .collect();
-        let inhabited =
-            read_inhabited(dim, &chunks).map_err(|e| UnknownReason::UnreadableFile {
-                path: match e {
-                    PlanError::Io { path, .. } => path,
-                    _ => dim.dir.clone(),
-                },
-            })?;
-        found.extend(
-            inhabited
-                .into_iter()
-                .map(|(pos, inhabited)| ((dim.id.clone(), pos), inhabited)),
-        );
-    }
-    Ok(found)
+    wgc::plan::trust_before_plan(&FsWorld::new(layout), gc_dims, skip_t3)
 }
 
 #[cfg(test)]

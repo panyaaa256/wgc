@@ -14,6 +14,10 @@ use crate::source::WorldSource;
 use crate::types::{ChunkPos, DataVersion, DimensionId, FileKind, Known, RegionPos, UnknownReason};
 use crate::versions::{DV_FILES_26_1, DV_MAX_KNOWN};
 
+/// File name of the lock in each world folder. The game holds it while the
+/// world is open; it is never copied to the output.
+pub const LOCK_FILE: &str = "session.lock";
+
 /// The four layouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LayoutKind {

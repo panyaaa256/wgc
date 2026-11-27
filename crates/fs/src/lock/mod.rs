@@ -13,8 +13,7 @@ use std::sync::{Mutex, PoisonError};
 
 use crate::layout::WorldLayout;
 
-/// File name of the lock in each world folder.
-pub const LOCK_FILE: &str = "session.lock";
+pub use wgc_core::layout::LOCK_FILE;
 
 /// Why `session.lock` could not be locked.
 #[derive(Debug, thiserror::Error)]

@@ -813,6 +813,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "wgc"
+version = "0.1.0"
+dependencies = [
+ "wgc-core",
+]
+
+[[package]]
 name = "wgc-cli"
 version = "0.1.0"
 dependencies = [
@@ -852,6 +859,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "wgc",
  "wgc-core",
  "windows-sys",
  "yaml-rust2",
