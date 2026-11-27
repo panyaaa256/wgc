@@ -114,7 +114,7 @@ pub trait GcHost: World {
     /// Where the output is requested.
     type Target;
     /// The checked output location.
-    type Out: Clone;
+    type Out;
     /// A lock on one world folder.
     type FolderLock;
     /// The source's files as they were when the output was planned.
