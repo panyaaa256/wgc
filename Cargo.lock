@@ -793,7 +793,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "wgc-core",
+ "wgc-fs",
 ]
 
 [[package]]
@@ -801,16 +801,26 @@ name = "wgc-core"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "libc",
  "lz4_flex",
  "nanonbt",
+ "serde",
+ "thiserror",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "wgc-fs"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "libc",
  "rayon",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
+ "wgc-core",
  "windows-sys",
- "xxhash-rust",
  "yaml-rust2",
 ]
 

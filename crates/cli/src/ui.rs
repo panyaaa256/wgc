@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use wgc_core::layout::{LayoutKind, WorldLayout};
-use wgc_core::report::{DimensionReport, LockStatus, ScanReport, TrustStatus};
-use wgc_core::types::{GuardId, Observer, Progress, Warning, short_dimension_id};
+use wgc_fs::layout::{LayoutKind, WorldLayout};
+use wgc_fs::report::{DimensionReport, LockStatus, ScanReport, TrustStatus};
+use wgc_fs::types::{GuardId, Observer, Progress, Warning, short_dimension_id};
 
 use crate::messages;
 
@@ -535,7 +535,7 @@ pub fn summary(
 
     // Notices. `RunOfficialOptimize` is only printed with the older chunk count above.
     for n in &r.notices {
-        if *n != wgc_core::report::Notice::RunOfficialOptimize {
+        if *n != wgc_fs::report::Notice::RunOfficialOptimize {
             writeln!(out, "{} {}", style.bold("Note:"), messages::notice(*n))?;
         }
     }
@@ -680,7 +680,7 @@ pub fn layout_paths(layout: &WorldLayout) -> Vec<String> {
         .world_folders
         .iter()
         .map(|f| {
-            wgc_core::report::rel_path(&layout.root, f).unwrap_or_else(|_| f.display().to_string())
+            wgc_fs::report::rel_path(&layout.root, f).unwrap_or_else(|_| f.display().to_string())
         })
         .collect()
 }

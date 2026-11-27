@@ -10,11 +10,11 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use clap::Parser;
-use wgc_core::layout::{self, WorldLayout};
-use wgc_core::output::{self, GcOptions, OutputError, VerifyError};
-use wgc_core::plan::{PlanError, PlanOptions, build_plan};
-use wgc_core::report::{self, LockStatus, ReportError};
-use wgc_core::trust::check_trust;
+use wgc_fs::layout::{self, WorldLayout};
+use wgc_fs::output::{self, GcOptions, OutputError, VerifyError};
+use wgc_fs::plan::{PlanError, PlanOptions, build_plan};
+use wgc_fs::report::{self, LockStatus, ReportError};
+use wgc_fs::trust::check_trust;
 
 use args::{Cli, Command, GcArgs, ScanArgs, VerifyArgs};
 use ui::{SummaryKind, Terminal};
@@ -180,7 +180,7 @@ fn gc_estimate(
     cli: &Cli,
     term: &Terminal,
     layout: &WorldLayout,
-    gc_dims: Option<BTreeSet<wgc_core::types::DimensionId>>,
+    gc_dims: Option<BTreeSet<wgc_fs::types::DimensionId>>,
 ) -> u8 {
     let (lock, _held) = report::try_lock_for_report(layout, term);
     let plan = match build_plan(layout, &PlanOptions { gc_dims }, term, &CANCEL) {
@@ -220,7 +220,7 @@ fn gc_output(
     cli: &Cli,
     term: &Terminal,
     layout: &WorldLayout,
-    gc_dims: Option<BTreeSet<wgc_core::types::DimensionId>>,
+    gc_dims: Option<BTreeSet<wgc_fs::types::DimensionId>>,
     out: &std::path::Path,
 ) -> u8 {
     let options = GcOptions {
@@ -242,7 +242,7 @@ fn gc_output(
                 | OutputError::OutputOverlapsSource { .. }
                 | OutputError::Stopped(_)
                 | OutputError::InsufficientSpace { .. } => exit::STOPPED,
-                OutputError::Lock(wgc_core::lock::LockError::Io { .. }) => exit::ERROR,
+                OutputError::Lock(wgc_fs::lock::LockError::Io { .. }) => exit::ERROR,
                 OutputError::Lock(_) => exit::STOPPED,
                 OutputError::Verification(_) => exit::VERIFY,
                 OutputError::Cancelled => exit::INTERRUPTED,

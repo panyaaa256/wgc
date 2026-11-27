@@ -7,8 +7,9 @@ the invariants it keeps. Behavior is defined by
 
 ## Workspace
 
-- A virtual manifest with two crates: `crates/core` (`wgc-core`, library) and
-  `crates/cli` (`wgc`, binary). Neither is published.
+- A virtual manifest with three crates: `crates/core` (`wgc-core`, library),
+  `crates/fs` (`wgc-fs`, library) and `crates/cli` (`wgc`, the
+  binary). None is published.
 - The toolchain is pinned in `rust-toolchain.toml` (with rustfmt, clippy and
   rust-analyzer). No MSRV is declared.
 - Dependency versions are declared once in `[workspace.dependencies]`.
@@ -33,7 +34,8 @@ typos
 
 ## Code
 
-- `cli` depends on `core`, never the reverse. `core` never prints; see
+- Dependencies point `cli` → `fs` → `core`, never the reverse. Only `cli`
+  prints, and `core` does no file system access; see
   [`ARCHITECTURE.md`](ARCHITECTURE.md#invariants).
 - No `unwrap()`, `expect()` or `panic!` in non-test code.
 - Comments explain what the code cannot: invariants, non-obvious choices,
@@ -70,7 +72,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 - Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`,
   `ci`, `chore`, `revert`.
-- Scope: the affected area, such as `core`, `cli`, `region`, `output`.
+- Scope: the affected area, such as `core`, `fs`, `cli`, `region`, `output`.
 - Description: imperative mood, present tense, under 72 characters.
 - Mark breaking changes with `!` or a `BREAKING CHANGE:` footer.
 - One logical change per commit.

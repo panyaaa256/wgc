@@ -337,8 +337,10 @@ fn be_u32(bytes: &[u8], at: usize) -> u32 {
     u32::from_be_bytes(bytes[at..at + 4].try_into().expect("4 bytes"))
 }
 
-#[cfg(test)]
-pub(crate) mod test_util {
+/// Builders for synthetic test data, shared with the crates that depend on this one.
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub mod test_util {
     use super::*;
 
     /// A chunk to place in a synthetic region file.

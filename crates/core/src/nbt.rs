@@ -455,9 +455,10 @@ fn for_each_entry<'a>(
     }
 }
 
-#[cfg(test)]
-pub(crate) mod test_util {
-    //! A tiny NBT writer for tests.
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub mod test_util {
+    //! A tiny NBT writer for tests, shared with the crates that depend on this one.
 
     pub enum V {
         Byte(i8),

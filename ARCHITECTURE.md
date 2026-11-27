@@ -38,19 +38,32 @@ it in.
 
 ## Code map
 
-The workspace has two crates: `crates/core` (`wgc-core`, a library) and
-`crates/cli` (`wgc`, the binary).
+The workspace has three crates: `crates/core` (`wgc-core`, a library),
+`crates/fs` (`wgc-fs`, a library) and `crates/cli` (`wgc`, the
+binary).
 
 ### `crates/core`
 
+Pure data handling: no file system access.
+
 - `types`: shared value types (coordinates, dimension IDs, file kinds, the
-  check IDs `GuardId`), plus `Observer`, `Progress` and `Warning`, the channel
-  through which long operations talk to the caller.
+  check IDs `GuardId`).
 - `versions`: the DataVersion constants the code branches on.
 - `region`: parsing Anvil region files, decompressing chunks, structural
   checks (S-1..S-8), and repacking a region from kept payloads.
 - `nbt`: reading the few NBT fields wgc needs from chunks, `level.dat`, player
   data and forced-chunk files. The only module that uses the NBT library.
+
+The `test-util` feature exposes builders for synthetic region files and NBT to
+the tests of the other crates.
+
+### `crates/fs`
+
+Everything that touches the host file system, and the steps of each command.
+
+- `types`: the `wgc-core` value types, plus `Known` and `UnknownReason`, and
+  `Observer`, `Progress` and `Warning`, the channel through which long
+  operations talk to the caller.
 - `layout`: recognizing the world layout and enumerating files (`WorldLayout`).
   Every later step finds files through it.
 - `lock`: `session.lock` locking.
@@ -87,11 +100,12 @@ The workspace has two crates: `crates/core` (`wgc-core`, a library) and
   `--force` does not allow is found before anything is written.
 - **Determinism.** The same input produces the same plan, the same output and
   byte-identical JSON, regardless of parallelism.
-- **`core` never prints.** It has no CLI dependencies; warnings and progress go
-  through `Observer`, and every sentence a user reads is built in
-  `cli::messages`. `core` returns typed errors; `cli` turns them into messages
-  and exit codes.
-- **Dependencies point one way:** `cli` → `core`.
+- **Only `cli` prints.** `core` and `fs` have no CLI dependencies; warnings and
+  progress go through `Observer`, and every sentence a user reads is built in
+  `cli::messages`. `core` and `fs` return typed errors; `cli` turns them into
+  messages and exit codes.
+- **`core` does no file system access.** It works on bytes and values only.
+- **Dependencies point one way:** `cli` → `fs` → `core`.
 
 ## Cross-cutting concerns
 

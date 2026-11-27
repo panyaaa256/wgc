@@ -1,11 +1,11 @@
 //! Every message the tool prints, in one place (English only).
 
-use wgc_core::layout::LayoutError;
-use wgc_core::lock::LockError;
-use wgc_core::output::{ChangedFile, OutputError, VerifyError, VerifyFailure};
-use wgc_core::plan::PlanError;
-use wgc_core::report::{DetailJson, Notice, ReasonJson, ReportError};
-use wgc_core::types::{GuardId, Warning};
+use wgc_fs::layout::LayoutError;
+use wgc_fs::lock::LockError;
+use wgc_fs::output::{ChangedFile, OutputError, VerifyError, VerifyFailure};
+use wgc_fs::plan::PlanError;
+use wgc_fs::report::{DetailJson, Notice, ReasonJson, ReportError};
+use wgc_fs::types::{GuardId, Warning};
 
 use crate::ui::ListCounts;
 

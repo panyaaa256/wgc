@@ -11,7 +11,7 @@ name = "wgc"
 path = "src/main.rs"
 
 [dependencies]
-wgc-core.workspace = true
+wgc-fs.workspace = true
 clap.workspace = true
 ctrlc.workspace = true
 indicatif.workspace = true
