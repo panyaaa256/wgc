@@ -2,6 +2,8 @@
 
 use super::{HEADER_BYTES, RegionFile, SECTOR_BYTES};
 use crate::types::ChunkIndex;
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// Why a region file cannot be repacked.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

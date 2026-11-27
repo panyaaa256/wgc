@@ -1,7 +1,10 @@
 //! Basic types shared by every module.
 
-use std::fmt;
-use std::str::FromStr;
+use alloc::borrow::ToOwned;
+use alloc::format;
+use alloc::string::String;
+use core::fmt;
+use core::str::FromStr;
 
 /// Region coordinates (`r.<x>.<z>.mca`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

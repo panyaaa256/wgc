@@ -14,14 +14,16 @@ wgc-fs = { path = "crates/fs" }
 clap = { version = "4.6", features = ["derive"] }
 indicatif = "0.18"
 console = { version = "0.16", default-features = false, features = ["std"] }
-thiserror = "2"
+thiserror = { version = "2", default-features = false }
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
-lz4_flex = { version = "0.14", default-features = false, features = ["safe-decode", "std"] }
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc", "simd"] }
+crc32fast = { version = "1.5", default-features = false }
+lz4_flex = { version = "0.14", default-features = false, features = ["safe-decode"] }
 xxhash-rust = { version = "0.8", features = ["xxh32"] }
 tempfile = "3"
 rayon = "1.12"
 yaml-rust2 = "0.13"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
 serde_json = "1"
 ctrlc = "3.5"
 nanonbt = { git = "https://github.com/TMCJapan/nanonbt", rev = "50ee11b581ac4790e594bff81ebe07d394f09891", default-features = false, features = ["alloc"] }

@@ -7,8 +7,11 @@
 mod compression;
 mod write;
 
-use std::collections::BTreeSet;
-use std::fmt;
+use alloc::collections::BTreeSet;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::types::{ChunkIndex, ChunkPos, FileKind, RegionPos};
 
@@ -341,6 +344,8 @@ fn be_u32(bytes: &[u8], at: usize) -> u32 {
 #[cfg(any(test, feature = "test-util"))]
 #[doc(hidden)]
 pub mod test_util {
+    use alloc::vec;
+
     use super::*;
 
     /// A chunk to place in a synthetic region file.

@@ -16,7 +16,7 @@ clap.workspace = true
 ctrlc.workspace = true
 indicatif.workspace = true
 console.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["std"] }
 serde_json.workspace = true
 
 [dev-dependencies]

@@ -8,11 +8,15 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
-flate2.workspace = true
+miniz_oxide.workspace = true
+crc32fast.workspace = true
 lz4_flex.workspace = true
 xxhash-rust.workspace = true
 nanonbt.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true
 
 [features]
 # Builders for synthetic region files and NBT, for the tests of dependent crates.

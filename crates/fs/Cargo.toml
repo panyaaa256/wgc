@@ -8,10 +8,10 @@ publish.workspace = true
 
 [dependencies]
 wgc-core.workspace = true
-thiserror.workspace = true
+thiserror = { workspace = true, features = ["std"] }
 rayon.workspace = true
 yaml-rust2.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["std"] }
 serde_json.workspace = true
 
 [target.'cfg(unix)'.dependencies]

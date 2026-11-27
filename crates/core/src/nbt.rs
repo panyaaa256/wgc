@@ -4,12 +4,14 @@
 //! are read; everything else is skipped with `nanonbt::skip_nbt`. A tag with
 //! an unexpected type is treated like a missing tag.
 
-use std::collections::BTreeSet;
+use alloc::collections::BTreeSet;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use nanonbt::{Read, SliceReader, Tag};
 
-use std::io::Read as _;
-
+use crate::inflate::Inflater;
 use crate::types::{ChunkPos, DataVersion};
 use crate::versions::{DV_CHUNK_ROOT, DV_GAMERULE_REGISTRY};
 
@@ -135,18 +137,14 @@ fn read_references(r: &mut SliceReader<'_>, out: &mut BTreeSet<ChunkPos>) -> Res
 }
 
 /// Largest decompressed size accepted for `level.dat` and saved data files.
-const MAX_GZIP_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_GZIP_BYTES: usize = 64 * 1024 * 1024;
 
 /// Decompresses a gzip file such as `level.dat` or a saved data file.
 pub fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, NbtError> {
     let mut out = Vec::new();
-    flate2::read::MultiGzDecoder::new(bytes)
-        .take(MAX_GZIP_BYTES + 1)
-        .read_to_end(&mut out)
+    Inflater::new()
+        .gzip(bytes, &mut out, MAX_GZIP_BYTES)
         .map_err(|_| NbtError::Malformed)?;
-    if out.len() as u64 > MAX_GZIP_BYTES {
-        return Err(NbtError::Malformed);
-    }
     Ok(out)
 }
 
@@ -459,6 +457,9 @@ fn for_each_entry<'a>(
 #[doc(hidden)]
 pub mod test_util {
     //! A tiny NBT writer for tests, shared with the crates that depend on this one.
+
+    use alloc::vec;
+    use alloc::vec::Vec;
 
     pub enum V {
         Byte(i8),

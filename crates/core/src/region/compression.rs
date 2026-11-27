@@ -1,11 +1,9 @@
 //! Chunk decompression.
 
-use std::io::Read;
-
-use flate2::read::MultiGzDecoder;
-use flate2::{Decompress, FlushDecompress, Status};
+use alloc::vec::Vec;
 
 use super::EXTERNAL_FLAG;
+use crate::inflate::{InflateError, Inflater};
 
 const GZIP: u8 = 1;
 const ZLIB: u8 = 2;
@@ -52,7 +50,7 @@ pub fn decompress(payload: &[u8], external: Option<&[u8]>) -> Result<Vec<u8>, De
 /// output buffer. Nearly all the time of reading a world goes to inflating
 /// chunks, and allocating both anew for each chunk costs about a quarter of it.
 pub struct Decompressor {
-    inflate: Decompress,
+    inflate: Inflater,
     out: Vec<u8>,
 }
 
@@ -65,7 +63,7 @@ impl Default for Decompressor {
 impl Decompressor {
     pub fn new() -> Self {
         Self {
-            inflate: Decompress::new(true),
+            inflate: Inflater::new(),
             out: Vec::new(),
         }
     }
@@ -90,8 +88,8 @@ impl Decompressor {
         let out = &mut self.out;
         out.clear();
         match method {
-            GZIP => read_all(MultiGzDecoder::new(data), out, MAX_DECOMPRESSED_BYTES)?,
-            ZLIB => inflate_zlib(&mut self.inflate, data, out, MAX_DECOMPRESSED_BYTES)?,
+            GZIP => self.inflate.gzip(data, out, MAX_DECOMPRESSED_BYTES)?,
+            ZLIB => self.inflate.zlib(data, out, MAX_DECOMPRESSED_BYTES)?,
             NONE => out.extend_from_slice(data),
             LZ4 => lz4_block_stream(data, out)?,
             _ => return Err(DecompressError::UnsupportedCompression(method)),
@@ -100,60 +98,13 @@ impl Decompressor {
     }
 }
 
-fn read_all(reader: impl Read, out: &mut Vec<u8>, limit: usize) -> Result<(), DecompressError> {
-    reader
-        .take(limit as u64 + 1)
-        .read_to_end(out)
-        .map_err(|_| DecompressError::Corrupt)?;
-    if out.len() > limit {
-        return Err(DecompressError::TooLarge);
-    }
-    Ok(())
-}
-
-/// Smallest capacity `inflate_zlib` gives the output buffer.
-const MIN_INFLATE_CAPACITY: usize = 64 * 1024;
-
-/// Inflates a zlib stream into `out`. Like `flate2::read::ZlibDecoder`, bytes
-/// after the end of the stream are ignored and a stream that ends early is
-/// corrupt.
-fn inflate_zlib(
-    inflate: &mut Decompress,
-    data: &[u8],
-    out: &mut Vec<u8>,
-    limit: usize,
-) -> Result<(), DecompressError> {
-    inflate.reset(true);
-    loop {
-        if out.len() > limit {
-            return Err(DecompressError::TooLarge);
-        }
-        if out.len() == out.capacity() {
-            out.reserve(out.len().max(MIN_INFLATE_CAPACITY));
-        }
-        // `total_in` never exceeds `data.len()`, which is a `usize`.
-        let consumed = inflate.total_in() as usize;
-        let produced = out.len();
-        let input = &data[consumed..];
-        let flush = if input.is_empty() {
-            FlushDecompress::Finish
-        } else {
-            FlushDecompress::None
-        };
-        match inflate.decompress_vec(input, out, flush) {
-            Ok(Status::StreamEnd) => break,
-            // The buffer had room, so no progress means the input ran out.
-            Ok(_) if inflate.total_in() as usize == consumed && out.len() == produced => {
-                return Err(DecompressError::Corrupt);
-            }
-            Ok(_) => {}
-            Err(_) => return Err(DecompressError::Corrupt),
+impl From<InflateError> for DecompressError {
+    fn from(e: InflateError) -> Self {
+        match e {
+            InflateError::Corrupt => DecompressError::Corrupt,
+            InflateError::TooLarge => DecompressError::TooLarge,
         }
     }
-    if out.len() > limit {
-        return Err(DecompressError::TooLarge);
-    }
-    Ok(())
 }
 
 const LZ4_MAGIC: &[u8; 8] = b"LZ4Block";
@@ -175,7 +126,7 @@ fn lz4_block_stream(mut data: &[u8], out: &mut Vec<u8>) -> Result<(), Decompress
         let max_block = 1usize << (LZ4_LEVEL_BASE + u32::from(token & 0x0F));
         let compressed_len = le_len(&data[9..13])?;
         let original_len = le_len(&data[13..17])?;
-        let checksum = u32::from_le_bytes(data[17..21].try_into().expect("4 bytes"));
+        let checksum = le_u32(&data[17..21])?;
         if original_len == 0 {
             if compressed_len != 0 || checksum != 0 {
                 return Err(DecompressError::Corrupt);
@@ -215,8 +166,14 @@ fn lz4_block_stream(mut data: &[u8], out: &mut Vec<u8>) -> Result<(), Decompress
     }
 }
 
+fn le_u32(bytes: &[u8]) -> Result<u32, DecompressError> {
+    let bytes = bytes.try_into().map_err(|_| DecompressError::Corrupt)?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+/// A little-endian `int` length, which must not be negative.
 fn le_len(bytes: &[u8]) -> Result<usize, DecompressError> {
-    let v = i32::from_le_bytes(bytes.try_into().expect("4 bytes"));
+    let v = le_u32(bytes)?.cast_signed();
     usize::try_from(v).map_err(|_| DecompressError::Corrupt)
 }
 
@@ -228,6 +185,7 @@ mod tests {
     use flate2::write::{GzEncoder, ZlibEncoder};
 
     use super::*;
+    use crate::inflate::MIN_GROWTH;
 
     fn payload(compression: u8, data: &[u8]) -> Vec<u8> {
         let mut p = (data.len() as u32 + 1).to_be_bytes().to_vec();
@@ -323,7 +281,10 @@ mod tests {
         let data = zl.finish().unwrap();
         let inflate = |limit| {
             let mut out = Vec::new();
-            inflate_zlib(&mut Decompress::new(true), &data, &mut out, limit).map(|()| out.len())
+            Inflater::new()
+                .zlib(&data, &mut out, limit)
+                .map_err(DecompressError::from)
+                .map(|()| out.len())
         };
         assert_eq!(inflate(1000), Err(DecompressError::TooLarge));
         assert_eq!(inflate(1001), Ok(1001));
@@ -333,7 +294,10 @@ mod tests {
         let data = gz.finish().unwrap();
         let gunzip = |limit| {
             let mut out = Vec::new();
-            read_all(MultiGzDecoder::new(&data[..]), &mut out, limit).map(|()| out.len())
+            Inflater::new()
+                .gzip(&data, &mut out, limit)
+                .map_err(DecompressError::from)
+                .map(|()| out.len())
         };
         assert_eq!(gunzip(1000), Err(DecompressError::TooLarge));
         assert_eq!(gunzip(1001), Ok(1001));
@@ -347,13 +311,13 @@ mod tests {
 
     #[test]
     fn zlib_output_larger_than_the_initial_buffer() {
-        let data = compressible(5 * MIN_INFLATE_CAPACITY + 123);
+        let data = compressible(5 * MIN_GROWTH + 123);
         assert_eq!(
             decompress(&payload(ZLIB, &zlib(&data)), None).unwrap(),
             data
         );
         // Incompressible data fills the buffer before the input is used up.
-        let data = noise(3 * MIN_INFLATE_CAPACITY);
+        let data = noise(3 * MIN_GROWTH);
         assert_eq!(
             decompress(&payload(ZLIB, &zlib(&data)), None).unwrap(),
             data
