@@ -44,13 +44,15 @@ binary).
 
 ### `crates/core`
 
-Pure data handling: no file system access.
+Pure data handling, `no_std` + `alloc`
+([ADR-0013](docs/adr/0013-keep-the-core-crate-no-std.md)).
 
 - `types`: shared value types (coordinates, dimension IDs, file kinds, the
   check IDs `GuardId`).
 - `versions`: the DataVersion constants the code branches on.
 - `region`: parsing Anvil region files, decompressing chunks, structural
   checks (S-1..S-8), and repacking a region from kept payloads.
+- `inflate`: zlib and gzip decoding with an output size limit.
 - `nbt`: reading the few NBT fields wgc needs from chunks, `level.dat`, player
   data and forced-chunk files. The only module that uses the NBT library.
 
@@ -104,7 +106,8 @@ Everything that touches the host file system, and the steps of each command.
   progress go through `Observer`, and every sentence a user reads is built in
   `cli::messages`. `core` and `fs` return typed errors; `cli` turns them into
   messages and exit codes.
-- **`core` does no file system access.** It works on bytes and values only.
+- **`core` does no file system access.** It is `no_std` and works on bytes
+  and values only.
 - **Dependencies point one way:** `cli` → `fs` → `core`.
 
 ## Cross-cutting concerns
