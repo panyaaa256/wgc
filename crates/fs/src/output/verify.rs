@@ -45,7 +45,7 @@ pub(crate) fn check_output(
     // V-5: compare the output with what the plan requires, derived here
     // independently of what the writer chose to write.
     let expected = expected_outputs(plan, walked, out);
-    let found = crate::layout::files_in(std::slice::from_ref(&out.to_path_buf()))?;
+    let found = crate::layout::files_in(&[out])?;
     let record_dir = out.join(RECORD_DIR);
     let found_paths: BTreeSet<&PathBuf> = found
         .files

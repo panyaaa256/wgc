@@ -37,10 +37,10 @@ pub fn world_files(layout: &WorldLayout) -> Result<WorldFiles, LayoutError> {
 }
 
 /// Like [`world_files`], for any list of folders.
-pub fn files_in(folders: &[PathBuf]) -> Result<WorldFiles, LayoutError> {
+pub fn files_in(folders: &[impl AsRef<Path>]) -> Result<WorldFiles, LayoutError> {
     let mut out = WorldFiles::default();
     for folder in folders {
-        walk(folder, false, &mut Vec::new(), &mut out)?;
+        walk(folder.as_ref(), false, &mut Vec::new(), &mut out)?;
     }
     out.files.sort();
     out.files.dedup_by(|a, b| a.path == b.path);
