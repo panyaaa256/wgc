@@ -77,7 +77,7 @@ pub fn check_trust<S: WorldSource>(source: &S, plan: &Plan<S::Path>) -> TrustRep
         source,
         &plan.layout,
         plan.gc_dims.as_ref(),
-        plan.protection_unknown.clone(),
+        &plan.protection_unknown,
         Some(|wanted: &BTreeSet<ChunkKey>| Ok(inhabited_in_plan(plan, wanted))),
     )
 }
@@ -98,14 +98,14 @@ pub fn check_trust_before_plan<S: WorldSource>(
         impl FnOnce(&BTreeSet<ChunkKey>) -> Result<InhabitedMap, UnknownReason<S::Path>>,
     >,
 ) -> TrustReport<S::Path> {
-    let protection_unknown = layout
+    let protection_unknown: BTreeSet<DimensionId> = layout
         .dimensions
         .iter()
         .filter(|d| is_targeted(gc_dims, &d.id))
         .filter(|d| matches!(layout::forced_chunks(source, layout, d), Known::Unknown(_)))
         .map(|d| d.id.clone())
         .collect();
-    run_checks(source, layout, gc_dims, protection_unknown, inhabited_of)
+    run_checks(source, layout, gc_dims, &protection_unknown, inhabited_of)
 }
 
 /// A chunk in a dimension.
@@ -118,7 +118,7 @@ fn run_checks<S: WorldSource>(
     source: &S,
     layout: &WorldLayout<S::Path>,
     gc_dims: Option<&BTreeSet<DimensionId>>,
-    protection_unknown: BTreeSet<DimensionId>,
+    protection_unknown: &BTreeSet<DimensionId>,
     inhabited_of: Option<
         impl FnOnce(&BTreeSet<ChunkKey>) -> Result<InhabitedMap, UnknownReason<S::Path>>,
     >,
@@ -542,9 +542,13 @@ fn version<P>(layout: &WorldLayout<P>) -> CheckStatus<P> {
 /// read, so chunks around them cannot be protected from deletion.
 fn forced_chunks<P>(
     gc_dims: Option<&BTreeSet<DimensionId>>,
-    mut unknown: BTreeSet<DimensionId>,
+    unknown: &BTreeSet<DimensionId>,
 ) -> CheckStatus<P> {
-    unknown.retain(|id| is_targeted(gc_dims, id));
+    let unknown: BTreeSet<DimensionId> = unknown
+        .iter()
+        .filter(|id| is_targeted(gc_dims, id))
+        .cloned()
+        .collect();
     if unknown.is_empty() {
         CheckStatus::Pass
     } else {
