@@ -39,7 +39,7 @@ it in.
 ## Code map
 
 The workspace has three crates: `crates/core` (`wgc-core`, a library),
-`crates/fs` (`wgc-fs`, a library) and `crates/cli` (`wgc`, the
+`crates/fs` (`wgc-fs`, a library) and `crates/cli` (`wgc-cli`, the `wgc`
 binary).
 
 ### `crates/core`

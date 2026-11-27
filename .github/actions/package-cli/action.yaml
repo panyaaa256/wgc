@@ -16,7 +16,7 @@ runs:
       shell: bash
       env:
         TARGET: ${{ inputs.target }}
-      run: cargo build -p wgc --release --locked --target "$TARGET"
+      run: cargo build -p wgc-cli --release --locked --target "$TARGET"
 
     - name: Package CLI
       shell: bash

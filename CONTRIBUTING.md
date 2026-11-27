@@ -8,7 +8,7 @@ the invariants it keeps. Behavior is defined by
 ## Workspace
 
 - A virtual manifest with three crates: `crates/core` (`wgc-core`, library),
-  `crates/fs` (`wgc-fs`, library) and `crates/cli` (`wgc`, the
+  `crates/fs` (`wgc-fs`, library) and `crates/cli` (`wgc-cli`, the `wgc`
   binary). None is published.
 - The toolchain is pinned in `rust-toolchain.toml` (with rustfmt, clippy and
   rust-analyzer). No MSRV is declared.

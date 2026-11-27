@@ -1,5 +1,5 @@
 [package]
-name = "wgc"
+name = "wgc-cli"
 description = "Delete unused chunks from Minecraft Java Edition worlds"
 version.workspace = true
 edition.workspace = true
