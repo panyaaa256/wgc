@@ -81,10 +81,10 @@ jobs:
       - name: Check rustdoc warnings
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-  # A target without `std` fails the build if `wgc-core`, or any dependency of
-  # it, reaches for `std`; a host build would not notice.
+  # A target without `std` fails the build if `wgc-core` or `wgc`, or any
+  # dependency of them, reaches for `std`; a host build would not notice.
   no-std:
-    name: wgc-core without std
+    name: no_std crates
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -102,9 +102,9 @@ jobs:
           components: clippy
           cache-key: no-std
 
-      - name: Check wgc-core on a no_std target
+      - name: Check wgc-core and wgc on a no_std target
         run: |
-          cargo clippy -p wgc-core --target thumbv7em-none-eabihf -- -D warnings
+          cargo clippy -p wgc-core -p wgc --target thumbv7em-none-eabihf -- -D warnings
           cargo clippy -p wgc-core --features test-util --target thumbv7em-none-eabihf -- -D warnings
 
   # Intentionally not gated on `test`: waiting would give back exactly the wall
