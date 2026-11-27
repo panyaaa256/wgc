@@ -4,12 +4,10 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use wgc_core::layout::LOCK_FILE;
 use wgc_core::plan::{
     Inhabited, Plan, PlanOptions, analyze_triple, decide, estimate, forceload_protection,
     group_externals, is_targeted, player_files,
 };
-use wgc_core::source::WorldSource;
 use wgc_core::trust::{ChunkKey, InhabitedMap, TrustReport, check_trust_before_plan};
 use wgc_core::types::{ChunkPos, DimensionId, Known, PerKind, UnknownReason};
 
@@ -104,17 +102,11 @@ pub fn build_plan_with<W: World>(
     }
 
     let players = player_files(source, layout).map_err(W::Error::from)?;
-    let lock_files: BTreeSet<PathOf<W>> = layout
-        .world_folders
-        .iter()
-        .map(|folder| source.join(folder, LOCK_FILE))
-        .collect();
     let estimate = estimate(
         listed.iter().map(|(_, files)| files),
         &dimensions,
         &players.omitted,
-        W::file_sizes(files),
-        &lock_files,
+        world.copied_files(files),
     );
     Ok(Plan {
         layout: layout.clone(),

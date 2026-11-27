@@ -89,8 +89,13 @@ pub trait World: Sync {
     /// Lists every file under the world folders.
     fn files(&self) -> Result<Self::Files, Self::Error>;
 
-    /// Each listed file with its size.
-    fn file_sizes<'a>(files: &'a Self::Files) -> impl Iterator<Item = (&'a PathOf<Self>, u64)>
+    /// Each listed file that may be written to the output, with its size:
+    /// every file except `session.lock` and the records of an earlier run
+    /// directly in a world folder.
+    fn copied_files<'a>(
+        &'a self,
+        files: &'a Self::Files,
+    ) -> impl Iterator<Item = (&'a PathOf<Self>, u64)>
     where
         PathOf<Self>: 'a;
 

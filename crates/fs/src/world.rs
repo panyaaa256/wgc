@@ -97,11 +97,15 @@ impl World for FsWorld<'_> {
         Ok(layout::world_files(self.layout)?)
     }
 
-    fn file_sizes<'a>(files: &'a WorldFiles) -> impl Iterator<Item = (&'a PathBuf, u64)>
+    fn copied_files<'a>(&'a self, files: &'a WorldFiles) -> impl Iterator<Item = (&'a PathBuf, u64)>
     where
         PathBuf: 'a,
     {
-        files.files.iter().map(|f| (&f.path, f.size))
+        files
+            .files
+            .iter()
+            .filter(|f| !output::is_excluded(self.layout, &f.path))
+            .map(|f| (&f.path, f.size))
     }
 
     fn error_path(&self, error: &PlanError) -> Option<PathBuf> {

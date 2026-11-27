@@ -363,6 +363,18 @@ fn boundary_with_old_terrain() {
 }
 
 #[test]
+fn records_of_an_earlier_run_are_not_counted() {
+    let t = world(&[
+        ("region/r.0.0.mca", build(&[c(0, 5)])),
+        (".wgc/complete.json", vec![0; 30]),
+        ("data/.wgc/kept.json", vec![0; 11]),
+    ]);
+    let p = plan(t.path());
+    let level_dat = std::fs::metadata(t.path().join("level.dat")).unwrap().len();
+    assert_eq!(p.estimate.other_files_bytes, level_dat + 11);
+}
+
+#[test]
 fn estimate_counts_other_files() {
     let t = world(&[
         ("region/r.0.0.mca", build(&[c(0, 5)])),

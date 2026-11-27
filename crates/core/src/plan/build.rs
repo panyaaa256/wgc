@@ -397,16 +397,15 @@ fn is_player_temp_file(name: &str) -> bool {
 
 /// The sizes before and after GC, and the total the output needs.
 ///
-/// `listed` holds the triples of every dimension, `world_files` every file
-/// under the world folders with its size, and `lock_files` the `session.lock`
-/// of each world folder, which is never copied. Every file that is not part of
-/// a triple, an attached `.mcc` file or an omitted file is copied as it is.
+/// `listed` holds the triples of every dimension, and `copied_files` every
+/// file under the world folders that may be written to the output, with its
+/// size. Every such file that is not part of a triple, an attached `.mcc` file
+/// or an omitted file is copied as it is.
 pub fn estimate<'a, P: Ord + 'a>(
     listed: impl IntoIterator<Item = &'a DimensionFiles<P>>,
     dimensions: &[DimensionPlan<P>],
     omitted: &[OmittedFile<P>],
-    world_files: impl IntoIterator<Item = (&'a P, u64)>,
-    lock_files: &BTreeSet<P>,
+    copied_files: impl IntoIterator<Item = (&'a P, u64)>,
 ) -> Estimate {
     let mut est = Estimate::default();
     for dim in dimensions {
@@ -435,9 +434,9 @@ pub fn estimate<'a, P: Ord + 'a>(
         }
     }
     managed.extend(omitted.iter().map(|o| &o.path));
-    est.other_files_bytes = world_files
+    est.other_files_bytes = copied_files
         .into_iter()
-        .filter(|(path, _)| !managed.contains(path) && !lock_files.contains(path))
+        .filter(|(path, _)| !managed.contains(path))
         .map(|(_, size)| size)
         .sum();
     est.total_output_bytes += est.other_files_bytes;
