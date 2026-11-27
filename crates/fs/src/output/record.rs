@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::{OutputError, RECORD_DIR, io_err, sync_dir};
 use crate::layout::{WorldFiles, WorldLayout};
 use crate::plan::Plan;
-use crate::report::{ReportError, rel_path};
+use crate::report::{ReportError, rel_path, utf8};
 use crate::types::GuardId;
 
 /// The source world when `gc --out` started (`source-state.json`).
@@ -108,10 +108,7 @@ impl SourceState {
         let root = &layout.root;
         Ok(SourceState {
             schema: "wgc.source-state/1".to_owned(),
-            source: root
-                .to_str()
-                .map(str::to_owned)
-                .ok_or_else(|| report_err(ReportError::NonUtf8Path(root.clone())))?,
+            source: utf8(root).map_err(report_err)?,
             layout: layout.kind.as_str().to_owned(),
             world_folders: layout
                 .world_folders

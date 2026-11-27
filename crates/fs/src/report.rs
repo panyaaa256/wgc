@@ -82,12 +82,17 @@ pub fn gc_report(
             let full = std::fs::canonicalize(p)
                 .or_else(|_| std::path::absolute(p))
                 .unwrap_or_else(|_| p.to_path_buf());
-            full.to_str()
-                .map(str::to_owned)
-                .ok_or(ReportError::NonUtf8Path(full.clone()))
+            utf8(&full)
         })
         .transpose()?;
     Ok(wgc_core::report::gc_report(scan, out, forced, plan))
+}
+
+/// `path` as a string, if it is valid UTF-8.
+pub(crate) fn utf8(path: &Path) -> Result<String, ReportError> {
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| ReportError::NonUtf8Path(path.to_path_buf()))
 }
 
 /// `path` relative to `root`, with `/` separators. `root` itself is `"."`.
@@ -96,7 +101,7 @@ pub fn gc_report(
 pub fn rel_path(root: &Path, path: &Path) -> Result<String, ReportError> {
     let non_utf8 = || ReportError::NonUtf8Path(path.to_path_buf());
     let Ok(relative) = path.strip_prefix(root) else {
-        return path.to_str().map(str::to_owned).ok_or_else(non_utf8);
+        return utf8(path);
     };
     let mut parts = Vec::new();
     for component in relative.components() {
