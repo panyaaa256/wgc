@@ -38,9 +38,9 @@ it in.
 
 ## Code map
 
-The workspace has three crates: `crates/core` (`wgc-core`, a library),
-`crates/fs` (`wgc-fs`, a library) and `crates/cli` (`wgc-cli`, the `wgc`
-binary).
+The workspace has four crates: `crates/core` (`wgc-core`, a library),
+`crates/wgc` (`wgc`, a library), `crates/fs` (`wgc-fs`, a library) and
+`crates/cli` (`wgc-cli`, the `wgc` binary).
 
 ### `crates/core`
 
@@ -71,26 +71,42 @@ path type.
 The `test-util` feature exposes builders for synthetic region files and NBT to
 the tests of the other crates.
 
+### `crates/wgc`
+
+The steps of each command, `no_std` + `alloc` like `wgc-core`. They are
+written against traits, so they do not depend on where the world is stored or
+how work runs in parallel.
+
+- `host`: `Runner` (independent work, possibly in parallel; `Sequential` runs
+  it in order), `World` (a recognized world: its layout, files and locks) and
+  `GcHost` (the output location, the source state, and writing, verifying and
+  recording the output).
+- `observe`: `Observer`, `Progress` and `Warning`, the channel through which
+  long operations talk to the caller.
+- `plan`: `build_plan`, and the trust checks that run before planning.
+- `scan`: `wgc scan` and the `gc` estimate.
+- `gc`: `gc --out` (`run_gc`): the order of the steps, `--force`, the free
+  space check, and recording a failure.
+
 ### `crates/fs`
 
-Everything that touches the host file system, and the steps of each command.
-Its `plan`, `trust` and `report` modules run the `wgc-core` ones on the host.
+Everything that touches the host file system. Its `plan`, `trust`, `report`
+and `output` modules run the `wgc-core` and `wgc` ones on the host.
 
 - `source`: `FsSource`, the host file system as a `WorldSource`.
-- `types`: the `wgc-core` value types for host paths, and `Observer`,
-  `Progress` and `Warning`, the channel through which long operations talk to
-  the caller.
+- `world`: `FsWorld`, a world on disk as a `World` and `GcHost`, and `Rayon`,
+  a `Runner` on the `rayon` thread pool.
+- `types`: the `wgc-core` and `wgc` types for host paths.
 - `layout`: recognizing the world layout, listing region triples and walking
   every file under the world folders. Every later step finds files through
   the `WorldLayout` it returns.
 - `lock`: `session.lock` locking.
 - `sys`: platform calls (file locks, free space, privileges). The only module
   with `unsafe` code.
-- `plan`: `build_plan`, which reads the region triples in parallel.
-- `trust`: running the trust checks before and after planning.
-- `report`: the lock status, paths relative to the input, and `wgc scan`.
-- `output`: `gc --out` (`run_gc`), copying, verification, the `.wgc/` records,
-  and `wgc verify`.
+- `plan`, `trust`, `report`: the `wgc-core` and `wgc` steps for a world on
+  disk, and paths relative to the input.
+- `output`: checking the output folder, copying, verification, the `.wgc/`
+  records, and `wgc verify`.
 
 ### `crates/cli`
 
@@ -116,13 +132,13 @@ Its `plan`, `trust` and `report` modules run the `wgc-core` ones on the host.
   `--force` does not allow is found before anything is written.
 - **Determinism.** The same input produces the same plan, the same output and
   byte-identical JSON, regardless of parallelism.
-- **Only `cli` prints.** `core` and `fs` have no CLI dependencies; warnings and
+- **Only `cli` prints.** The libraries have no CLI dependencies; warnings and
   progress go through `Observer`, and every sentence a user reads is built in
-  `cli::messages`. `core` and `fs` return typed errors; `cli` turns them into
+  `cli::messages`. The libraries return typed errors; `cli` turns them into
   messages and exit codes.
-- **`core` does no file system access.** It is `no_std` and works on bytes
-  and values only.
-- **Dependencies point one way:** `cli` → `fs` → `core`.
+- **`core` and `wgc` do no file system access.** They are `no_std`, and read
+  the world only through `WorldSource`, which cannot write.
+- **Dependencies point one way:** `cli` → `fs` → `wgc` → `core`.
 
 ## Cross-cutting concerns
 
@@ -135,8 +151,8 @@ carry the path involved.
 units of work (a region triple, or one output file). A cancelled run returns a
 `Cancelled` error and never writes `complete.json`.
 
-**Parallelism.** Planning runs per region triple, writing and verification per
-file, with `rayon`. Results are sorted by position before they are combined, so
+**Parallelism.** Planning runs per region triple through a `Runner`, writing
+and verification per file, with `rayon` on the host. Results are sorted by position before they are combined, so
 parallelism never changes the output.
 
 **User-facing IDs.** T-1..T-5 and L-1 (checks), S-1..S-8 and C-1/C-2 (broken
