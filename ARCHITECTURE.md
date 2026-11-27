@@ -83,6 +83,8 @@ how work runs in parallel.
   recording the output).
 - `observe`: `Observer`, `Progress` and `Warning`, the channel through which
   long operations talk to the caller.
+- `outcome`: `Outcome`, how a command ended; errors classify themselves into
+  it, and `cli` maps it to an exit code.
 - `plan`: `build_plan`, and the trust checks that run before planning.
 - `scan`: `wgc scan` and the `gc` estimate.
 - `gc`: `gc --out` (`run_gc`): the order of the steps, `--force`, the free
@@ -111,7 +113,8 @@ and `output` modules run the `wgc-core` and `wgc` ones on the host.
 ### `crates/cli`
 
 - `args`: command-line parsing.
-- `main`: runs a command, maps failures to exit codes, handles Ctrl-C.
+- `main`: runs a command, maps each `Outcome` to its exit code, handles
+  Ctrl-C. It decides nothing about the world itself.
 - `messages`: every user-facing sentence, in one place.
 - `ui`: terminal output: colors, progress bars, warnings and the summary.
 
