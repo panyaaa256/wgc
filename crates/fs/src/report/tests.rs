@@ -7,7 +7,7 @@ use super::*;
 use crate::layout::test_util::{gzip, write};
 use crate::lock::SessionLock;
 use crate::nbt::test_util::{V, doc};
-use crate::plan::{Inhabited, PlanOptions};
+use crate::plan::{Inhabited, Plan, PlanOptions};
 use crate::region::StructuralId;
 use crate::region::test_util::{build, chunk};
 use crate::source::FsSource;
@@ -209,7 +209,13 @@ fn gc_report_adds_its_fields() {
     let layout = crate::layout::detect(t.path()).unwrap();
     let plan = plan(&layout, PlanOptions::default());
     let scan = scan_report(&plan);
-    let gc = gc_report(scan, None, &BTreeSet::from([GuardId::T3]), &plan).unwrap();
+    let gc = gc_report(
+        scan,
+        None,
+        &BTreeSet::from([GuardId::T3]),
+        plan.gc_dims.as_ref(),
+    )
+    .unwrap();
     let v = serde_json::to_value(&gc).unwrap();
     assert_eq!(v["schema"], "wgc.gc/1");
     assert_eq!(v["mode"], "estimate");
@@ -225,7 +231,13 @@ fn gc_report_adds_its_fields() {
 
     let scan = scan_report(&plan);
     let out = tempfile::tempdir().unwrap();
-    let gc = gc_report(scan, Some(&out.path().join(".")), &BTreeSet::new(), &plan).unwrap();
+    let gc = gc_report(
+        scan,
+        Some(&out.path().join(".")),
+        &BTreeSet::new(),
+        plan.gc_dims.as_ref(),
+    )
+    .unwrap();
     let v = serde_json::to_value(&gc).unwrap();
     assert_eq!(v["mode"], "output");
     assert_eq!(

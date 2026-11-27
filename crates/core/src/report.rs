@@ -18,7 +18,7 @@ use crate::plan::{
 };
 use crate::region::{ContentError, StructuralId};
 use crate::trust::{CheckStatus, TrustDetail, TrustReport};
-use crate::types::{ChunkPos, FileKind, GuardId, UnknownReason};
+use crate::types::{ChunkPos, DimensionId, FileKind, GuardId, UnknownReason};
 
 /// A path the report has to name is not valid UTF-8.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -589,11 +589,11 @@ fn dimension_report<P>(
 /// Pass `out`, the absolute path of the output, only after the output was
 /// written and verified: the report then says `output` and carries the
 /// `no_trash` notice.
-pub fn gc_report<P>(
+pub fn gc_report(
     mut scan: ScanReport,
     out: Option<String>,
     forced: &BTreeSet<GuardId>,
-    plan: &Plan<P>,
+    gc_dims: Option<&BTreeSet<DimensionId>>,
 ) -> GcReport {
     scan.schema = "wgc.gc/1";
     if out.is_some() {
@@ -608,10 +608,7 @@ pub fn gc_report<P>(
         },
         out,
         forced: forced.iter().copied().collect(),
-        dimensions_targeted: plan
-            .gc_dims
-            .as_ref()
-            .map(|dims| dims.iter().map(ToString::to_string).collect()),
+        dimensions_targeted: gc_dims.map(|dims| dims.iter().map(ToString::to_string).collect()),
     }
 }
 

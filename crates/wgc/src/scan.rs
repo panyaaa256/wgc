@@ -85,5 +85,10 @@ pub fn run_estimate<W: World>(
     let plan = build_plan(world, runner, PlanOptions { gc_dims }, observer, cancel)?;
     let trust = check_trust(world.source(), &plan);
     let scan = scan_report(world, &plan, &trust, lock)?;
-    Ok(gc_report(scan, None, &BTreeSet::new(), &plan))
+    Ok(gc_report(
+        scan,
+        None,
+        &BTreeSet::new(),
+        plan.gc_dims.as_ref(),
+    ))
 }

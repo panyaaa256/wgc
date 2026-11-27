@@ -10,8 +10,8 @@ pub use wgc_core::report::*;
 use crate::Outcome;
 use crate::layout::WorldLayout;
 use crate::output::GcOutcome;
-use crate::plan::{Plan, PlanError};
-use crate::types::GuardId;
+use crate::plan::PlanError;
+use crate::types::{DimensionId, GuardId};
 use crate::world::FsWorld;
 
 /// Why a report could not be produced.
@@ -53,7 +53,12 @@ pub fn gc_output_report(outcome: &GcOutcome) -> Result<GcReport, ReportError> {
     let world = FsWorld::new(&outcome.plan.layout);
     let scan =
         wgc::scan::scan_report(&world, &outcome.plan, &outcome.trust, outcome.lock_status())?;
-    gc_report(scan, Some(&outcome.out), &outcome.forced, &outcome.plan)
+    gc_report(
+        scan,
+        Some(&outcome.out),
+        &outcome.forced,
+        outcome.plan.gc_dims.as_ref(),
+    )
 }
 
 /// The world folders relative to the input path, for the steps that swap the
@@ -75,7 +80,7 @@ pub fn gc_report(
     scan: ScanReport,
     out: Option<&Path>,
     forced: &BTreeSet<GuardId>,
-    plan: &Plan,
+    gc_dims: Option<&BTreeSet<DimensionId>>,
 ) -> Result<GcReport, ReportError> {
     let out = out
         .map(|p| {
@@ -85,7 +90,7 @@ pub fn gc_report(
             utf8(&full)
         })
         .transpose()?;
-    Ok(wgc_core::report::gc_report(scan, out, forced, plan))
+    Ok(wgc_core::report::gc_report(scan, out, forced, gc_dims))
 }
 
 /// `path` as a string, if it is valid UTF-8.
