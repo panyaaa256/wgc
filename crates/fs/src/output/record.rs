@@ -89,16 +89,6 @@ fn report_err(e: ReportError) -> OutputError {
     }
 }
 
-pub(crate) fn mtime_ns(meta: &fs::Metadata) -> i64 {
-    match meta.modified() {
-        Ok(t) => match t.duration_since(UNIX_EPOCH) {
-            Ok(d) => i64::try_from(d.as_nanos()).unwrap_or(i64::MAX),
-            Err(e) => -i64::try_from(e.duration().as_nanos()).unwrap_or(i64::MAX),
-        },
-        Err(_) => 0,
-    }
-}
-
 impl SourceState {
     /// Stats every file of the world folders (including `session.lock`).
     pub(crate) fn capture(
@@ -172,15 +162,17 @@ impl SourceState {
 
 /// Path, size and modification time of every walked file, sorted.
 fn stat_files(root: &Path, walked: &WorldFiles) -> Result<Vec<SourceStateFile>, OutputError> {
-    let mut files = Vec::new();
-    for f in &walked.files {
-        let meta = fs::metadata(&f.path).map_err(io_err(&f.path))?;
-        files.push(SourceStateFile {
-            path: rel_path(root, &f.path).map_err(report_err)?,
-            size: meta.len(),
-            mtime_ns: mtime_ns(&meta),
-        });
-    }
+    let mut files = walked
+        .files
+        .iter()
+        .map(|f| {
+            Ok(SourceStateFile {
+                path: rel_path(root, &f.path).map_err(report_err)?,
+                size: f.size,
+                mtime_ns: f.mtime_ns,
+            })
+        })
+        .collect::<Result<Vec<_>, OutputError>>()?;
     files.sort();
     Ok(files)
 }

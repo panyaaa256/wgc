@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use super::{LayoutError, WorldLayout, read_dir_opt};
 
@@ -10,6 +11,8 @@ use super::{LayoutError, WorldLayout, read_dir_opt};
 pub struct WorldFile {
     pub path: PathBuf,
     pub size: u64,
+    /// Modification time in nanoseconds since the Unix epoch.
+    pub mtime_ns: i64,
     /// Reached through a symbolic link (the file itself or a parent directory).
     pub via_symlink: bool,
 }
@@ -53,6 +56,18 @@ pub fn files_in(folders: &[impl AsRef<Path>]) -> Result<WorldFiles, LayoutError>
     Ok(out)
 }
 
+/// Modification time in nanoseconds since the Unix epoch, negative before
+/// it; 0 when the platform does not report one.
+fn mtime_ns(meta: &fs::Metadata) -> i64 {
+    match meta.modified() {
+        Ok(t) => match t.duration_since(UNIX_EPOCH) {
+            Ok(d) => i64::try_from(d.as_nanos()).unwrap_or(i64::MAX),
+            Err(e) => -i64::try_from(e.duration().as_nanos()).unwrap_or(i64::MAX),
+        },
+        Err(_) => 0,
+    }
+}
+
 fn walk(
     dir: &Path,
     via_symlink: bool,
@@ -93,6 +108,7 @@ fn walk(
             out.files.push(WorldFile {
                 path,
                 size: meta.len(),
+                mtime_ns: mtime_ns(&meta),
                 via_symlink: via_symlink || is_link,
             });
         } else {
