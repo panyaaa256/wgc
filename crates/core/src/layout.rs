@@ -187,8 +187,9 @@ impl<P> WorldLayout<P> {
     }
 }
 
-/// Reads a gzip NBT file; `Ok(None)` if it does not exist.
-fn read_optional<S: WorldSource, T>(
+/// Reads a gzip NBT file; `Ok(None)` if it does not exist. A file that cannot
+/// be read, decompressed or parsed is [`UnknownReason::UnreadableFile`].
+pub(crate) fn read_gzip_nbt<S: WorldSource, T>(
     source: &S,
     path: &S::Path,
     parse: impl FnOnce(&[u8]) -> Result<T, NbtError>,
@@ -225,7 +226,7 @@ pub fn spawn_mobs<S: WorldSource>(
 ) -> Known<bool, S::Path> {
     let game_rules = |folder: &S::Path| -> Result<_, UnknownReason<S::Path>> {
         let path = source.join(folder, "data/minecraft/game_rules.dat");
-        let value = read_optional(source, &path, nbt::read_game_rules_file)?;
+        let value = read_gzip_nbt(source, &path, nbt::read_game_rules_file)?;
         Ok((path, value.unwrap_or(RuleValue::Absent)))
     };
     let main_level_rule = || {
@@ -241,7 +242,7 @@ pub fn spawn_mobs<S: WorldSource>(
             LayoutKind::Bukkit => game_rules(folder)?,
             LayoutKind::BukkitLegacy if *folder != layout.main_world_folder => {
                 let path = source.join(folder, "level.dat");
-                match read_optional(source, &path, nbt::read_level_info)? {
+                match read_gzip_nbt(source, &path, nbt::read_level_info)? {
                     Some(info) => (path, info.spawn_mobs),
                     None => return Err(UnknownReason::UnreadableFile { path }),
                 }
@@ -279,7 +280,7 @@ pub fn forced_chunks<S: WorldSource>(
             [old, new]
         };
         for path in candidates {
-            if let Some(chunks) = read_optional(source, &path, nbt::read_forced_chunks)? {
+            if let Some(chunks) = read_gzip_nbt(source, &path, nbt::read_forced_chunks)? {
                 return Ok(chunks);
             }
         }

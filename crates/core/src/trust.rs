@@ -381,14 +381,15 @@ fn read_players<S: WorldSource>(
         else {
             continue;
         };
-        let player = read_gzip(source, &path, nbt::read_player).ok_or_else(|| unreadable(&path))?;
+        let player = layout::read_gzip_nbt(source, &path, nbt::read_player)?
+            .ok_or_else(|| unreadable(&path))?;
         players.push((stem.to_owned(), player));
     }
 
     if !layout.has_26_1_files() {
         let level = source.join(&layout.main_world_folder, "level.dat");
-        let host =
-            read_gzip(source, &level, nbt::read_level_player).ok_or_else(|| unreadable(&level))?;
+        let host = layout::read_gzip_nbt(source, &level, nbt::read_level_player)?
+            .ok_or_else(|| unreadable(&level))?;
         // The host usually also has a player file; do not count them twice.
         if let Some(host) = host
             && !players
@@ -514,16 +515,6 @@ fn is_uuid(s: &str) -> bool {
             8 | 13 | 18 | 23 => b == b'-',
             _ => b.is_ascii_hexdigit(),
         })
-}
-
-fn read_gzip<S: WorldSource, T>(
-    source: &S,
-    path: &S::Path,
-    parse: impl FnOnce(&[u8]) -> Result<T, nbt::NbtError>,
-) -> Option<T> {
-    let bytes = source.read(path).ok()?;
-    let nbt = nbt::gunzip(&bytes).ok()?;
-    parse(&nbt).ok()
 }
 
 // ---- T-4, T-5 --------------------------------------------------------------
