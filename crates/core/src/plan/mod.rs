@@ -11,11 +11,11 @@ use alloc::vec::Vec;
 
 use crate::layout::{Dimension, WorldLayout};
 use crate::region::{ContentError, HEADER_BYTES, SECTOR_BYTES, StructuralIssue, packed_sectors};
-use crate::types::{ChunkIndex, ChunkPos, DataVersion, DimensionId, FileKind, RegionPos};
+use crate::types::{ChunkIndex, ChunkPos, DataVersion, DimensionId, FileKind, Known, RegionPos};
 
 pub use build::{
-    Analysis, Externals, PlayerFiles, analyze_triple, decide, estimate, group_externals,
-    player_files, read_inhabited,
+    Analysis, Externals, PlayerFiles, analyze_triple, decide, estimate, forceload_protection,
+    group_externals, player_files, read_inhabited,
 };
 
 /// Options for building a [`Plan`].

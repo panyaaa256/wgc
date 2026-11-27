@@ -168,6 +168,21 @@ fn inhabited(summary: &Result<ChunkSummary, ContentError>) -> Inhabited {
     }
 }
 
+/// The forced chunks whose surroundings are protected from deletion in
+/// `dim`: none when GC does not target it, so nothing has to be read.
+pub fn forceload_protection<S: WorldSource>(
+    source: &S,
+    layout: &WorldLayout<S::Path>,
+    dim: &Dimension<S::Path>,
+    is_targeted: bool,
+) -> Known<BTreeSet<ChunkPos>, S::Path> {
+    if is_targeted {
+        layout::forced_chunks(source, layout, dim)
+    } else {
+        Known::Value(BTreeSet::new())
+    }
+}
+
 /// Chebyshev distance of the forceload protection around each forced chunk.
 const FORCELOAD_MARGIN: i32 = 2;
 

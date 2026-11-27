@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 
 use crate::layout::{self, Dimension, LayoutKind, WorldLayout};
 use crate::nbt::{self, PlayerDimension, PlayerSummary};
-use crate::plan::{Inhabited, Plan, is_targeted};
+use crate::plan::{Inhabited, Plan, forceload_protection, is_targeted};
 use crate::source::{Config, WorldSource};
 use crate::types::{ChunkPos, DimensionId, GuardId, Known, UnknownReason};
 use crate::versions::{DV_1_21_5, DV_FILES_26_1, DV_MAX_KNOWN};
@@ -101,8 +101,10 @@ pub fn check_trust_before_plan<S: WorldSource>(
     let protection_unknown: BTreeSet<DimensionId> = layout
         .dimensions
         .iter()
-        .filter(|d| is_targeted(gc_dims, &d.id))
-        .filter(|d| matches!(layout::forced_chunks(source, layout, d), Known::Unknown(_)))
+        .filter(|d| {
+            let protection = forceload_protection(source, layout, d, is_targeted(gc_dims, &d.id));
+            matches!(protection, Known::Unknown(_))
+        })
         .map(|d| d.id.clone())
         .collect();
     run_checks(source, layout, gc_dims, &protection_unknown, inhabited_of)

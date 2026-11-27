@@ -4,10 +4,10 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use wgc_core::layout::{LOCK_FILE, forced_chunks};
+use wgc_core::layout::LOCK_FILE;
 use wgc_core::plan::{
-    Inhabited, Plan, PlanOptions, analyze_triple, decide, estimate, group_externals, is_targeted,
-    player_files,
+    Inhabited, Plan, PlanOptions, analyze_triple, decide, estimate, forceload_protection,
+    group_externals, is_targeted, player_files,
 };
 use wgc_core::source::WorldSource;
 use wgc_core::trust::{ChunkKey, InhabitedMap, TrustReport, check_trust_before_plan};
@@ -77,16 +77,12 @@ pub fn build_plan<W: World>(
         finished += files.triples.len() as u64;
 
         let is_targeted = is_targeted(options.gc_dims.as_ref(), &dim.id);
-        let forced = if is_targeted {
-            match forced_chunks(source, layout, dim) {
-                Known::Value(chunks) => chunks,
-                Known::Unknown(_) => {
-                    protection_unknown.insert(dim.id.clone());
-                    BTreeSet::new()
-                }
+        let forced = match forceload_protection(source, layout, dim, is_targeted) {
+            Known::Value(chunks) => chunks,
+            Known::Unknown(_) => {
+                protection_unknown.insert(dim.id.clone());
+                BTreeSet::new()
             }
-        } else {
-            BTreeSet::new()
         };
         dimensions.push(decide(dim, analyses, is_targeted, &forced));
     }
