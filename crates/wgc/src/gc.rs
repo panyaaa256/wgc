@@ -96,9 +96,12 @@ impl Stage {
 /// Extra space required on top of the estimate.
 const SPACE_MARGIN: u64 = 64 * 1024 * 1024;
 
-/// Space the output needs: the estimate plus 1% and a fixed margin.
+/// Space the output needs: the estimate plus 1% and a fixed margin. An
+/// estimate too large to add to needs all the space there can be.
 const fn space_needed(estimate: u64) -> u64 {
-    estimate.saturating_add(estimate / 100) + SPACE_MARGIN
+    estimate
+        .saturating_add(estimate / 100)
+        .saturating_add(SPACE_MARGIN)
 }
 
 /// What [`run_gc`] returns for a host.
@@ -260,5 +263,7 @@ mod tests {
     fn space_needed_adds_a_percent_and_a_margin() {
         assert_eq!(space_needed(0), SPACE_MARGIN);
         assert_eq!(space_needed(1000), 1010 + SPACE_MARGIN);
+        assert_eq!(space_needed(u64::MAX - SPACE_MARGIN), u64::MAX);
+        assert_eq!(space_needed(u64::MAX), u64::MAX);
     }
 }
