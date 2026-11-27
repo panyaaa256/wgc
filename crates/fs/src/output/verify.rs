@@ -15,7 +15,6 @@ use crate::Outcome;
 use crate::layout::WorldFiles;
 use crate::lock::{LockError, SessionLock};
 use crate::plan::{ExternalAction, FileAction, Plan};
-use crate::region::RegionFile;
 use crate::types::{Observer, Progress, Warning};
 
 /// Checks V-1..V-6. All failures are collected.
@@ -125,22 +124,11 @@ fn check_file(
         ));
         return Ok(failures);
     };
-    let externals = t
-        .file(r.kind)
-        .map(|f| f.externals.iter().map(|x| x.pos).collect())
-        .unwrap_or_default();
-    let source = RegionFile::parse(
+    let source = t.parse_file(
         r.kind,
-        t.pos,
         fs::read(&file.source).map_err(io_err(&file.source))?,
-        &externals,
     );
-    let output = RegionFile::parse(
-        r.kind,
-        t.pos,
-        fs::read(dest).map_err(io_err(dest))?,
-        &externals,
-    );
+    let output = t.parse_file(r.kind, fs::read(dest).map_err(io_err(dest))?);
     // V-1: no structural issues.
     if !output.issues().is_empty() {
         failures.push(fail("V-1", format!("{:?}", output.issues())));

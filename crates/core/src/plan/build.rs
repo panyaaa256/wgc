@@ -53,8 +53,7 @@ pub fn analyze_triple<S: WorldSource>(
             continue;
         };
         let externals = externals_of[kind].get(&triple.pos).unwrap_or(&empty);
-        let present: BTreeSet<ChunkPos> = externals.keys().copied().collect();
-        let file = RegionFile::parse(kind, triple.pos, source.read(path)?, &present);
+        let file = read_region_file(source, kind, triple.pos, path, externals)?;
         analysis.issues.extend_from_slice(file.issues());
 
         if kind == FileKind::Region {
@@ -89,6 +88,19 @@ pub fn analyze_triple<S: WorldSource>(
     }
     analysis.issues.sort();
     Ok(analysis)
+}
+
+/// Reads and parses the file of `kind` at `pos`; `externals` are the `.mcc`
+/// files of its kind in its region.
+fn read_region_file<S: WorldSource>(
+    source: &S,
+    kind: FileKind,
+    pos: RegionPos,
+    path: &S::Path,
+    externals: &BTreeMap<ChunkPos, S::Path>,
+) -> Result<RegionFile, S::Error> {
+    let present: BTreeSet<ChunkPos> = externals.keys().copied().collect();
+    Ok(RegionFile::parse(kind, pos, source.read(path)?, &present))
 }
 
 type ChunkSummaries = Vec<(ChunkIndex, ChunkPos, Result<ChunkSummary, ContentError>)>;
@@ -137,8 +149,7 @@ pub fn read_inhabited<S: WorldSource>(
             continue;
         };
         let externals = externals.get(&triple.pos).unwrap_or(&empty);
-        let present: BTreeSet<ChunkPos> = externals.keys().copied().collect();
-        let file = RegionFile::parse(FileKind::Region, triple.pos, source.read(path)?, &present);
+        let file = read_region_file(source, FileKind::Region, triple.pos, path, externals)?;
         let summaries = chunk_summaries(source, &file, externals, |pos| chunks.contains(&pos))?;
         for (_, pos, summary) in summaries {
             found.insert(pos, inhabited(&summary));

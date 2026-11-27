@@ -12,7 +12,7 @@ use rayon::prelude::*;
 use super::{OutputError, destination, io_err, is_excluded, sync_dir};
 use crate::layout::{WorldFile, WorldFiles, WorldLayout};
 use crate::plan::{ExternalAction, FileAction, Plan, TriplePlan};
-use crate::region::{RegionFile, write_region};
+use crate::region::write_region;
 use crate::types::{ChunkPos, FileKind, Observer, Progress, Warning};
 
 /// How each source file was written.
@@ -138,11 +138,7 @@ fn write_one(
             Some(FileAction::Verbatim) | None => (copy_file(&file.path, &dest)?, None),
             Some(FileAction::Rewrite { keep }) => {
                 let bytes = fs::read(&file.path).map_err(io_err(&file.path))?;
-                let externals = t
-                    .file(*kind)
-                    .map(|f| f.externals.iter().map(|x| x.pos).collect())
-                    .unwrap_or_default();
-                let source = RegionFile::parse(*kind, t.pos, bytes, &externals);
+                let source = t.parse_file(*kind, bytes);
                 let packed = write_region(&source, &keep).map_err(|e| OutputError::Io {
                     path: file.path.clone(),
                     source: std::io::Error::other(e),

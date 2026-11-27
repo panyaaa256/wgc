@@ -10,7 +10,9 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use crate::layout::{Dimension, WorldLayout};
-use crate::region::{ContentError, HEADER_BYTES, SECTOR_BYTES, StructuralIssue, packed_sectors};
+use crate::region::{
+    ContentError, HEADER_BYTES, RegionFile, SECTOR_BYTES, StructuralIssue, packed_sectors,
+};
 use crate::types::{
     ChunkIndex, ChunkPos, DataVersion, DimensionId, FileKind, Known, PerKind, RegionPos,
 };
@@ -156,6 +158,16 @@ impl<P> TriplePlan<P> {
             .binary_search_by_key(&index, |c| c.index)
             .ok()
             .map(|i| self.chunks[i].decision)
+    }
+
+    /// Parses `bytes` as the file of `kind` of this triple, with the `.mcc`
+    /// files the plan found next to it.
+    pub fn parse_file(&self, kind: FileKind, bytes: Vec<u8>) -> RegionFile {
+        let externals: BTreeSet<ChunkPos> = self
+            .file(kind)
+            .map(|f| f.externals.iter().map(|x| x.pos).collect())
+            .unwrap_or_default();
+        RegionFile::parse(kind, self.pos, bytes, &externals)
     }
 
     /// What happens to the entry at `index` in the file of `kind`.
