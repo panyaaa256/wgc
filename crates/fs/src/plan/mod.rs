@@ -1,8 +1,6 @@
 //! The plan: what to delete and how to write each file, built from the files
 //! on disk.
 
-mod build;
-
 use std::io;
 use std::path::PathBuf;
 
@@ -13,8 +11,6 @@ pub use wgc_core::plan::{
 };
 
 use crate::layout::LayoutError;
-
-pub use build::build_plan;
 
 /// One region-format file of a triple.
 pub type FileInfo = wgc_core::plan::FileInfo<PathBuf>;
@@ -48,3 +44,6 @@ impl From<wgc::plan::PlanError<PlanError>> for PlanError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

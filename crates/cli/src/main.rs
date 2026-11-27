@@ -12,8 +12,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use clap::Parser;
 use wgc_fs::Outcome;
 use wgc_fs::layout::{self, WorldLayout};
-use wgc_fs::output::{self, GcOptions, VerifyError, VerifyJson};
+use wgc_fs::output::{self, GcOptions, OutputError, VerifyError, VerifyJson};
 use wgc_fs::report::{self, ReportError};
+use wgc_fs::world::{FsWorld, Rayon};
 
 use args::{Cli, Command, GcArgs, ScanArgs, VerifyArgs};
 use ui::{SummaryKind, Terminal};
@@ -136,7 +137,9 @@ fn scan(a: &ScanArgs, cli: &Cli, term: &Terminal) -> u8 {
         Ok(l) => l,
         Err(code) => return code,
     };
-    let report = match report::run_scan(&layout, term, &CANCEL) {
+    let report = match wgc::scan::run_scan(&FsWorld::new(&layout), &Rayon, term, &CANCEL)
+        .map_err(ReportError::from)
+    {
         Ok(r) => r,
         Err(e) => return report_error(&e, "scan", term),
     };
@@ -184,7 +187,10 @@ fn gc_estimate(
     layout: &WorldLayout,
     gc_dims: Option<BTreeSet<wgc_fs::types::DimensionId>>,
 ) -> u8 {
-    let report = match report::run_estimate(layout, gc_dims, term, &CANCEL) {
+    let world = FsWorld::new(layout);
+    let report = match wgc::scan::run_estimate(&world, &Rayon, gc_dims, term, &CANCEL)
+        .map_err(ReportError::from)
+    {
         Ok(r) => r,
         Err(e) => return report_error(&e, "gc", term),
     };
@@ -226,13 +232,15 @@ fn gc_output(
             .map(args::Force::allowed)
             .unwrap_or_default(),
     };
-    let outcome = match output::run_gc(layout, &options, term, &CANCEL) {
-        Ok(o) => o,
-        Err(e) => {
-            term.error(&messages::output(&e));
-            return exit::code(e.outcome());
-        }
-    };
+    let world = FsWorld::new(layout);
+    let outcome =
+        match wgc::gc::run_gc(&world, &Rayon, &options, term, &CANCEL).map_err(OutputError::from) {
+            Ok(o) => o,
+            Err(e) => {
+                term.error(&messages::output(&e));
+                return exit::code(e.outcome());
+            }
+        };
     let report = match report::gc_output_report(&outcome) {
         Ok(r) => r,
         Err(e) => return report_error(&e, "gc", term),

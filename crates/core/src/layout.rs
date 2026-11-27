@@ -331,7 +331,11 @@ mod tests {
             dimensions: vec![dim(DimensionId::overworld()), dim(DimensionId::the_end())],
         };
         let nether = DimensionId::the_nether();
-        let ids = [DimensionId::the_end(), nether.clone(), DimensionId::overworld()];
+        let ids = [
+            DimensionId::the_end(),
+            nether.clone(),
+            DimensionId::overworld(),
+        ];
         assert_eq!(layout.unknown_dimension(&ids), Some(&nether));
         assert_eq!(layout.unknown_dimension(&ids[..1]), None);
     }

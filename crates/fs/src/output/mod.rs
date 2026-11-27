@@ -10,7 +10,6 @@ pub(crate) mod verify;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 
 use wgc::gc::GcError;
 
@@ -18,8 +17,7 @@ use crate::Outcome;
 use crate::layout::{LayoutError, WorldLayout};
 use crate::lock::LockError;
 use crate::plan::PlanError;
-use crate::types::{GuardId, Observer, Warning};
-use crate::world::{FsWorld, Rayon};
+use crate::types::GuardId;
 
 pub use record::{ChangedFile, Complete, Failure, FailureItem, SourceState, SourceStateFile};
 pub use verify::{VerifyError, VerifyJson, VerifyOutcome, verify};
@@ -27,7 +25,7 @@ pub use verify::{VerifyError, VerifyJson, VerifyOutcome, verify};
 /// Name of the record folder in the output.
 pub const RECORD_DIR: &str = ".wgc";
 
-/// Options for [`run_gc`].
+/// Options for `gc --out`.
 pub type GcOptions = wgc::gc::GcOptions<PathBuf>;
 
 /// What a successful `gc --out` did. `out` is the output folder, canonicalized.
@@ -119,22 +117,17 @@ pub(crate) fn io_err(path: &Path) -> impl FnOnce(io::Error) -> OutputError + '_ 
     }
 }
 
-/// Runs `gc --out`. Every stop that `--force` did not allow is found before
-/// the output folder is created and before the plan reads every region file.
-pub fn run_gc(
-    layout: &WorldLayout,
-    options: &GcOptions,
-    observer: &dyn Observer<Warning>,
-    cancel: &AtomicBool,
-) -> Result<GcOutcome, OutputError> {
-    wgc::gc::run_gc(&FsWorld::new(layout), &Rayon, options, observer, cancel).map_err(|e| match e {
-        GcError::Stopped(ids) => OutputError::Stopped(ids),
-        GcError::InsufficientSpace { needed, available } => {
-            OutputError::InsufficientSpace { needed, available }
+impl From<GcError<OutputError>> for OutputError {
+    fn from(e: GcError<OutputError>) -> Self {
+        match e {
+            GcError::Stopped(ids) => OutputError::Stopped(ids),
+            GcError::InsufficientSpace { needed, available } => {
+                OutputError::InsufficientSpace { needed, available }
+            }
+            GcError::Cancelled => OutputError::Cancelled,
+            GcError::Host(e) => e,
         }
-        GcError::Cancelled => OutputError::Cancelled,
-        GcError::Host(e) => e,
-    })
+    }
 }
 
 /// Checks that `out` is new or empty and does not overlap the world.

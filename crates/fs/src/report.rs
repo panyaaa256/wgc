@@ -4,18 +4,15 @@
 
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 
 pub use wgc_core::report::*;
 
 use crate::Outcome;
 use crate::layout::WorldLayout;
-use crate::lock::SessionLocks;
 use crate::output::GcOutcome;
 use crate::plan::{Plan, PlanError};
-use crate::trust::TrustReport;
-use crate::types::{DimensionId, GuardId, Observer, Warning};
-use crate::world::{FsWorld, Rayon};
+use crate::types::GuardId;
+use crate::world::FsWorld;
 
 /// Why a report could not be produced.
 #[derive(Debug, thiserror::Error)]
@@ -42,24 +39,6 @@ impl From<NonUtf8Path<PathBuf>> for ReportError {
     }
 }
 
-/// Locks the world for a read-only report if possible; otherwise warns
-/// ([`Warning::LockUnavailable`]) and continues. Keep the returned locks alive while reading.
-pub fn try_lock_for_report(
-    layout: &WorldLayout,
-    observer: &dyn Observer<Warning>,
-) -> (LockStatus, Option<SessionLocks>) {
-    wgc::scan::try_lock_for_report(&FsWorld::new(layout), observer)
-}
-
-/// Runs `wgc scan`: locks if possible, plans every dimension and checks trust.
-pub fn run_scan(
-    layout: &WorldLayout,
-    observer: &dyn Observer<Warning>,
-    cancel: &AtomicBool,
-) -> Result<ScanReport, ReportError> {
-    wgc::scan::run_scan(&FsWorld::new(layout), &Rayon, observer, cancel).map_err(ReportError::from)
-}
-
 impl From<wgc::scan::ReportError<PlanError, PathBuf>> for ReportError {
     fn from(e: wgc::scan::ReportError<PlanError, PathBuf>) -> Self {
         match e {
@@ -69,21 +48,11 @@ impl From<wgc::scan::ReportError<PlanError, PathBuf>> for ReportError {
     }
 }
 
-/// Runs `wgc gc` without `--out`: what GC would delete in `gc_dims` (all
-/// dimensions if `None`), with nothing written.
-pub fn run_estimate(
-    layout: &WorldLayout,
-    gc_dims: Option<BTreeSet<DimensionId>>,
-    observer: &dyn Observer<Warning>,
-    cancel: &AtomicBool,
-) -> Result<GcReport, ReportError> {
-    wgc::scan::run_estimate(&FsWorld::new(layout), &Rayon, gc_dims, observer, cancel)
-        .map_err(ReportError::from)
-}
-
 /// The `wgc gc` report of a finished `gc --out`.
 pub fn gc_output_report(outcome: &GcOutcome) -> Result<GcReport, ReportError> {
-    let scan = scan_report(&outcome.plan, &outcome.trust, outcome.lock_status())?;
+    let world = FsWorld::new(&outcome.plan.layout);
+    let scan =
+        wgc::scan::scan_report(&world, &outcome.plan, &outcome.trust, outcome.lock_status())?;
     gc_report(scan, Some(&outcome.out), &outcome.forced, &outcome.plan)
 }
 
@@ -95,20 +64,6 @@ pub fn world_folder_names(layout: &WorldLayout) -> Vec<String> {
         .iter()
         .map(|f| rel_path(&layout.root, f).unwrap_or_else(|_| f.display().to_string()))
         .collect()
-}
-
-/// Builds the scan report for a plan made without `--dimension`.
-pub fn scan_report(
-    plan: &Plan,
-    trust: &TrustReport,
-    lock: LockStatus,
-) -> Result<ScanReport, ReportError> {
-    Ok(wgc::scan::scan_report(
-        &FsWorld::new(&plan.layout),
-        plan,
-        trust,
-        lock,
-    )?)
 }
 
 /// Turns a scan report into the `wgc gc` report.

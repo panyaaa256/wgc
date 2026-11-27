@@ -1,15 +1,11 @@
-//! Files the layout points at: `level.dat`, game rules, forced chunks,
-//! player data and Paper configuration.
+//! Reading `level.dat` while recognizing a layout.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use super::{Dimension, LayoutError, WorldLayout};
+use super::LayoutError;
 use crate::nbt::{self, LevelInfo};
-use crate::source::FsSource;
-use crate::types::{ChunkPos, Known};
 
 pub(super) fn read_level_dat(world_folder: &Path) -> Result<LevelInfo, LayoutError> {
     let path = world_folder.join("level.dat");
@@ -25,41 +21,22 @@ pub(super) fn read_level_dat(world_folder: &Path) -> Result<LevelInfo, LayoutErr
         .map_err(|source| LayoutError::UnreadableLevelDat { path, source })
 }
 
-/// Whether mob spawning is enabled for `dim` (game rule `spawn_mobs`, formerly `doMobSpawning`).
-///
-/// A rule that is not stored has its default value, enabled.
-pub fn spawn_mobs(layout: &WorldLayout, dim: &Dimension) -> Known<bool> {
-    wgc_core::layout::spawn_mobs(&FsSource, layout, dim)
-}
-
-/// The `/forceload` chunks of `dim`.
-pub fn forced_chunks(layout: &WorldLayout, dim: &Dimension) -> Known<BTreeSet<ChunkPos>> {
-    wgc_core::layout::forced_chunks(&FsSource, layout, dim)
-}
-
-/// The folder that holds `<uuid>.dat` player files.
-pub fn player_data_dir(layout: &WorldLayout) -> PathBuf {
-    wgc_core::layout::player_data_dir(&FsSource, layout)
-}
-
-/// `paper-world.yml` for `dim` (Bukkit layouts only).
-pub fn paper_world_config(layout: &WorldLayout, dim: &Dimension) -> Option<PathBuf> {
-    wgc_core::layout::paper_world_config(&FsSource, layout, dim)
-}
-
-/// `config/paper-world-defaults.yml` of the server (Bukkit layouts only).
-pub fn paper_defaults_config(layout: &WorldLayout) -> Option<PathBuf> {
-    wgc_core::layout::paper_defaults_config(&FsSource, layout)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::detect;
     use super::super::test_util::*;
+    use std::collections::BTreeSet;
+
     use super::*;
+    use crate::layout::{Dimension, WorldLayout};
     use crate::nbt::test_util::{V, doc, pack};
+    use crate::source::FsSource;
+    use crate::types::{ChunkPos, Known};
     use crate::types::{DimensionId, UnknownReason};
     use crate::versions::DV_MAX_KNOWN;
+    use wgc_core::layout::{
+        forced_chunks, paper_defaults_config, paper_world_config, player_data_dir, spawn_mobs,
+    };
 
     fn level(world: &Path, entries: Vec<(&'static str, V)>) {
         write(
@@ -89,7 +66,10 @@ mod tests {
             ],
         );
         let l = detect(t.path()).unwrap();
-        assert_eq!(spawn_mobs(&l, dim(&l, "overworld")), Known::Value(false));
+        assert_eq!(
+            spawn_mobs(&FsSource, &l, dim(&l, "overworld")),
+            Known::Value(false)
+        );
 
         // 4658..4771: level.dat game_rules byte; missing key means enabled.
         level(
@@ -100,7 +80,10 @@ mod tests {
             ],
         );
         let l = detect(t.path()).unwrap();
-        assert_eq!(spawn_mobs(&l, dim(&l, "overworld")), Known::Value(true));
+        assert_eq!(
+            spawn_mobs(&FsSource, &l, dim(&l, "overworld")),
+            Known::Value(true)
+        );
 
         // 4772 and later: data/minecraft/game_rules.dat.
         level(t.path(), vec![("DataVersion", V::Int(4786))]);
@@ -113,13 +96,16 @@ mod tests {
             &gzip(&rules),
         );
         let l = detect(t.path()).unwrap();
-        assert_eq!(spawn_mobs(&l, dim(&l, "overworld")), Known::Value(false));
+        assert_eq!(
+            spawn_mobs(&FsSource, &l, dim(&l, "overworld")),
+            Known::Value(false)
+        );
 
         // Unknown version.
         level(t.path(), vec![("DataVersion", V::Int(DV_MAX_KNOWN.0 + 1))]);
         let l = detect(t.path()).unwrap();
         assert!(matches!(
-            spawn_mobs(&l, dim(&l, "overworld")),
+            spawn_mobs(&FsSource, &l, dim(&l, "overworld")),
             Known::Unknown(UnknownReason::UnknownVersion(_))
         ));
     }
@@ -142,8 +128,14 @@ mod tests {
             ],
         );
         let l = detect(r).unwrap();
-        assert_eq!(spawn_mobs(&l, dim(&l, "overworld")), Known::Value(true));
-        assert_eq!(spawn_mobs(&l, dim(&l, "the_nether")), Known::Value(false));
+        assert_eq!(
+            spawn_mobs(&FsSource, &l, dim(&l, "overworld")),
+            Known::Value(true)
+        );
+        assert_eq!(
+            spawn_mobs(&FsSource, &l, dim(&l, "the_nether")),
+            Known::Value(false)
+        );
     }
 
     #[test]
@@ -154,7 +146,10 @@ mod tests {
         level(w, vec![("DataVersion", V::Int(4189))]);
         let l = detect(w).unwrap();
         let ow = dim(&l, "overworld").clone();
-        assert_eq!(forced_chunks(&l, &ow), Known::Value(BTreeSet::new()));
+        assert_eq!(
+            forced_chunks(&FsSource, &l, &ow),
+            Known::Value(BTreeSet::new())
+        );
 
         let forced = doc(vec![(
             "data",
@@ -162,13 +157,13 @@ mod tests {
         )]);
         write(&w.join("data/chunks.dat"), &gzip(&forced));
         assert_eq!(
-            forced_chunks(&l, &ow),
+            forced_chunks(&FsSource, &l, &ow),
             Known::Value(BTreeSet::from([ChunkPos::new(1, 2)]))
         );
 
         write(&w.join("data/chunks.dat"), b"broken");
         assert!(matches!(
-            forced_chunks(&l, &ow),
+            forced_chunks(&FsSource, &l, &ow),
             Known::Unknown(UnknownReason::UnreadableFile { .. })
         ));
     }
@@ -182,13 +177,16 @@ mod tests {
         level(&r.join("world"), vec![("DataVersion", V::Int(5023))]);
         let l = detect(r).unwrap();
         let ow = dim(&l, "overworld");
-        assert_eq!(player_data_dir(&l), l.root.join("world/players/data"));
         assert_eq!(
-            paper_world_config(&l, ow),
+            player_data_dir(&FsSource, &l),
+            l.root.join("world/players/data")
+        );
+        assert_eq!(
+            paper_world_config(&FsSource, &l, ow),
             Some(ow.dir.join("paper-world.yml"))
         );
         assert_eq!(
-            paper_defaults_config(&l),
+            paper_defaults_config(&FsSource, &l),
             Some(l.root.join("config/paper-world-defaults.yml"))
         );
     }

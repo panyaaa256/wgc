@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::sync::atomic::AtomicBool;
 
 use serde_json::Value;
 
@@ -6,11 +7,13 @@ use super::*;
 use crate::layout::test_util::{gzip, write};
 use crate::lock::SessionLock;
 use crate::nbt::test_util::{V, doc};
-use crate::plan::{Inhabited, PlanOptions, build_plan};
+use crate::plan::{Inhabited, PlanOptions};
 use crate::region::StructuralId;
 use crate::region::test_util::{build, chunk};
-use crate::trust::check_trust;
-use crate::types::NoopObserver;
+use crate::source::FsSource;
+use crate::types::{NoopObserver, Observer, Warning};
+use crate::world::{FsWorld, Rayon};
+use wgc_core::trust::check_trust;
 
 fn zlib(bytes: &[u8]) -> Vec<u8> {
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -55,6 +58,43 @@ fn world() -> tempfile::TempDir {
 fn scan(path: &Path) -> ScanReport {
     let layout = crate::layout::detect(path).unwrap();
     run_scan(&layout, &NoopObserver, &AtomicBool::new(false)).unwrap()
+}
+
+fn run_scan(
+    layout: &WorldLayout,
+    observer: &dyn Observer<Warning>,
+    cancel: &AtomicBool,
+) -> Result<ScanReport, ReportError> {
+    Ok(wgc::scan::run_scan(
+        &FsWorld::new(layout),
+        &Rayon,
+        observer,
+        cancel,
+    )?)
+}
+
+fn plan(layout: &WorldLayout, options: &PlanOptions) -> Plan {
+    let cancel = AtomicBool::new(false);
+    wgc::plan::build_plan(
+        &FsWorld::new(layout),
+        &Rayon,
+        options,
+        &NoopObserver,
+        &cancel,
+    )
+    .unwrap()
+}
+
+/// The scan report of `plan`, made while the world was locked.
+fn scan_report(plan: &Plan) -> ScanReport {
+    let trust = check_trust(&FsSource, plan);
+    wgc::scan::scan_report(
+        &FsWorld::new(&plan.layout),
+        plan,
+        &trust,
+        LockStatus::Acquired,
+    )
+    .unwrap()
 }
 
 fn json(report: &ScanReport) -> Value {
@@ -167,14 +207,8 @@ fn lock_unavailable_is_reported() {
 fn gc_report_adds_its_fields() {
     let t = world();
     let layout = crate::layout::detect(t.path()).unwrap();
-    let plan = build_plan(
-        &layout,
-        &PlanOptions::default(),
-        &NoopObserver,
-        &AtomicBool::new(false),
-    )
-    .unwrap();
-    let scan = scan_report(&plan, &check_trust(&plan), LockStatus::Acquired).unwrap();
+    let plan = plan(&layout, &PlanOptions::default());
+    let scan = scan_report(&plan);
     let gc = gc_report(scan, None, &BTreeSet::from([GuardId::T3]), &plan).unwrap();
     let v = serde_json::to_value(&gc).unwrap();
     assert_eq!(v["schema"], "wgc.gc/1");
@@ -189,7 +223,7 @@ fn gc_report_adds_its_fields() {
             .contains(&Value::from("no_trash"))
     );
 
-    let scan = scan_report(&plan, &check_trust(&plan), LockStatus::Acquired).unwrap();
+    let scan = scan_report(&plan);
     let out = tempfile::tempdir().unwrap();
     let gc = gc_report(scan, Some(&out.path().join(".")), &BTreeSet::new(), &plan).unwrap();
     let v = serde_json::to_value(&gc).unwrap();

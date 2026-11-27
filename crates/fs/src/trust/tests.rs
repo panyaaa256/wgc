@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
@@ -5,10 +6,13 @@ use std::sync::atomic::AtomicBool;
 use super::*;
 use crate::layout::test_util::{gzip, write};
 use crate::nbt::test_util::{V, doc};
-use crate::plan::{PlanOptions, build_plan};
+use crate::plan::PlanOptions;
 use crate::region::test_util::{build, chunk};
-use crate::types::{ChunkPos, GuardId, NoopObserver, UnknownReason};
+use crate::source::FsSource;
+use crate::types::{ChunkPos, DimensionId, GuardId, NoopObserver, UnknownReason};
 use crate::versions::DV_MAX_KNOWN;
+use crate::world::{FsWorld, Rayon};
+use wgc_core::trust::check_trust;
 
 fn zlib(bytes: &[u8]) -> Vec<u8> {
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -55,8 +59,15 @@ const UUID_D: &str = "00000000-0000-0000-0000-00000000000d";
 
 fn report(path: &std::path::Path, options: PlanOptions) -> TrustReport {
     let layout = crate::layout::detect(path).unwrap();
-    let plan = build_plan(&layout, &options, &NoopObserver, &AtomicBool::new(false)).unwrap();
-    check_trust(&plan)
+    let plan = wgc::plan::build_plan(
+        &FsWorld::new(&layout),
+        &Rayon,
+        &options,
+        &NoopObserver,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    check_trust(&FsSource, &plan)
 }
 
 fn status(report: &TrustReport, id: GuardId) -> &CheckStatus {
@@ -371,7 +382,7 @@ fn checks_before_the_plan_match_the_checks_against_the_plan() {
     player(&players, UUID_D, V::Int(1), 8.0, 0);
     let layout = crate::layout::detect(t.path()).unwrap();
 
-    let early = check_trust_before_plan(&layout, None, false);
+    let early = wgc::plan::trust_before_plan(&FsWorld::new(&layout), None, false);
     assert_eq!(early, report(t.path(), PlanOptions::default()));
     assert!(
         matches!(status(&early, GuardId::T3), CheckStatus::Fail(d) if matches!(&d[..], [TrustDetail::PlayerInZeroChunk { uuid, .. }] if uuid == UUID_A))
@@ -382,7 +393,7 @@ fn checks_before_the_plan_match_the_checks_against_the_plan() {
         gc_dims: Some(BTreeSet::from([DimensionId::the_end()])),
     };
     assert_eq!(
-        check_trust_before_plan(&layout, end.gc_dims.as_ref(), false),
+        wgc::plan::trust_before_plan(&FsWorld::new(&layout), end.gc_dims.as_ref(), false),
         report(t.path(), end)
     );
 }
@@ -392,7 +403,7 @@ fn t3_can_be_skipped_before_the_plan() {
     let t = vanilla();
     player(&t.path().join("playerdata"), UUID_A, V::Int(0), 8.0, 0);
     let layout = crate::layout::detect(t.path()).unwrap();
-    let skipped = check_trust_before_plan(&layout, None, true);
+    let skipped = wgc::plan::trust_before_plan(&FsWorld::new(&layout), None, true);
     let without_t3: Vec<_> = report(t.path(), PlanOptions::default())
         .checks
         .into_iter()
@@ -416,7 +427,7 @@ fn t3_before_the_plan_reads_external_chunks() {
     write(&t.path().join("region/c.0.0.mcc"), &zlib(&nbt));
     player(&t.path().join("playerdata"), UUID_A, V::Int(0), 8.0, 0);
     let layout = crate::layout::detect(t.path()).unwrap();
-    let early = check_trust_before_plan(&layout, None, false);
+    let early = wgc::plan::trust_before_plan(&FsWorld::new(&layout), None, false);
     assert_eq!(early, report(t.path(), PlanOptions::default()));
     assert!(matches!(status(&early, GuardId::T3), CheckStatus::Fail(_)));
 }

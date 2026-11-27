@@ -92,8 +92,9 @@ how work runs in parallel.
 
 ### `crates/fs`
 
-Everything that touches the host file system. Its `plan`, `trust`, `report`
-and `output` modules run the `wgc-core` and `wgc` ones on the host.
+Everything that touches the host file system. The commands run as `wgc`
+functions on `FsWorld` and `Rayon`; this crate has no entry points of its own
+for them.
 
 - `source`: `FsSource`, the host file system as a `WorldSource`.
 - `world`: `FsWorld`, a world on disk as a `World` and `GcHost`, and `Rayon`,
@@ -105,16 +106,18 @@ and `output` modules run the `wgc-core` and `wgc` ones on the host.
 - `lock`: `session.lock` locking.
 - `sys`: platform calls (file locks, free space, privileges). The only module
   with `unsafe` code.
-- `plan`, `trust`, `report`: the `wgc-core` and `wgc` steps for a world on
-  disk, and paths relative to the input.
+- `plan`, `trust`: the `wgc-core` types for host paths, and the errors of
+  reading a world on disk.
+- `report`: paths relative to the input, the report of a finished
+  `gc --out`, and the world folder names for the swap steps.
 - `output`: checking the output folder, copying, verification, the `.wgc/`
   records, and `wgc verify`.
 
 ### `crates/cli`
 
 - `args`: command-line parsing.
-- `main`: runs a command, maps each `Outcome` to its exit code, handles
-  Ctrl-C. It decides nothing about the world itself.
+- `main`: runs a command (a `wgc` function on `FsWorld`), maps each `Outcome`
+  to its exit code, handles Ctrl-C. It decides nothing about the world itself.
 - `messages`: every user-facing sentence, in one place.
 - `ui`: terminal output: colors, progress bars, warnings and the summary.
 
