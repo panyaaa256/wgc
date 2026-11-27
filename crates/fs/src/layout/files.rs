@@ -68,7 +68,6 @@ fn insert_unique(slot: &mut Option<PathBuf>, path: PathBuf) -> Result<(), Layout
 #[cfg(test)]
 mod tests {
     use super::super::test_util::*;
-    use std::collections::BTreeSet;
     use std::path::Path;
 
     use super::*;
@@ -106,13 +105,8 @@ mod tests {
         );
         let origin = &files.triples[1];
         assert!(origin.region.is_some() && origin.entities.is_some() && origin.poi.is_none());
-        assert_eq!(
-            files.externals_by_region(FileKind::Region),
-            BTreeMap::from([(
-                RegionPos::new(-1, 0),
-                BTreeSet::from([ChunkPos::new(-1, 3)])
-            )])
-        );
+        let externals: Vec<ChunkPos> = files.externals(FileKind::Region).keys().copied().collect();
+        assert_eq!(externals, [ChunkPos::new(-1, 3)]);
     }
 
     #[test]

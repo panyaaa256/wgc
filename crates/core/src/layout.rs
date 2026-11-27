@@ -152,15 +152,6 @@ impl<P> DimensionFiles<P> {
             FileKind::Poi => &mut self.poi_externals,
         }
     }
-
-    /// Chunks with an external file of `kind`, grouped by region.
-    pub fn externals_by_region(&self, kind: FileKind) -> BTreeMap<RegionPos, BTreeSet<ChunkPos>> {
-        let mut map: BTreeMap<RegionPos, BTreeSet<ChunkPos>> = BTreeMap::new();
-        for pos in self.externals(kind).keys() {
-            map.entry(pos.region()).or_default().insert(*pos);
-        }
-        map
-    }
 }
 
 impl<P> WorldLayout<P> {
