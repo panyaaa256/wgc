@@ -4,9 +4,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
 
-use rayon::prelude::*;
+use wgc::host::Runner;
 
 use super::copy::{Written, WrittenFile};
 use super::record::{ChangedFile, Complete, SourceState};
@@ -16,6 +15,7 @@ use crate::layout::WorldFiles;
 use crate::lock::{LockError, SessionLock};
 use crate::plan::{ExternalAction, FileAction, Plan};
 use crate::types::{Observer, Progress, Warning};
+use crate::world::Rayon;
 
 /// Checks V-1..V-6. All failures are collected.
 pub(crate) fn check_output(
@@ -27,24 +27,19 @@ pub(crate) fn check_output(
     observer: &dyn Observer<Warning>,
     cancel: &AtomicBool,
 ) -> Result<(), OutputError> {
-    // Counting and reporting under one lock keeps `done` increasing for the observer.
     let total = written.files.len() as u64;
-    let done = Mutex::new(0u64);
     observer.progress(Progress::Verifying { done: 0, total });
-    let per_file: Vec<Vec<VerifyFailure>> = written
-        .files
-        .par_iter()
-        .map(|(dest, file)| {
+    let files: Vec<_> = written.files.iter().collect();
+    let per_file = Rayon.try_map(
+        &files,
+        |(dest, file)| {
             if cancel.load(Ordering::Relaxed) {
                 return Err(OutputError::Cancelled);
             }
-            let failures = check_file(plan, dest, file)?;
-            let mut n = done.lock().unwrap_or_else(PoisonError::into_inner);
-            *n += 1;
-            observer.progress(Progress::Verifying { done: *n, total });
-            Ok(failures)
-        })
-        .collect::<Result<_, OutputError>>()?;
+            check_file(plan, dest, file)
+        },
+        |done| observer.progress(Progress::Verifying { done, total }),
+    )?;
     let mut failures: Vec<VerifyFailure> = per_file.into_iter().flatten().collect();
 
     // V-5: compare the output with what the plan requires, derived here

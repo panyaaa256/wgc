@@ -5,15 +5,15 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
 
-use rayon::prelude::*;
+use wgc::host::Runner;
 
 use super::{OutputError, destination, io_err, is_excluded, sync_dir};
 use crate::layout::{WorldFile, WorldFiles, WorldLayout};
 use crate::plan::{ExternalAction, FileAction, Plan, TriplePlan};
 use crate::region::write_region;
 use crate::types::{ChunkPos, FileKind, Observer, Progress, Warning};
+use crate::world::Rayon;
 
 /// How each source file was written.
 #[derive(Debug, Default)]
@@ -80,31 +80,23 @@ pub(crate) fn write_output(
         observer.warn(Warning::SpecialFileSkipped(special.clone()));
     }
 
-    // Counting and reporting under one lock keeps `done` increasing for the observer.
     let total = walked.files.len() as u64;
-    let done = Mutex::new(0u64);
     observer.progress(Progress::Writing { done: 0, total });
     // Files are independent of each other, and most of the time goes to
     // waiting for fsync, so they are written in parallel.
-    let outcomes: Vec<Option<(PathBuf, WrittenFile, bool)>> = walked
-        .files
-        .par_iter()
-        .map(|file| {
+    let outcomes = Rayon.try_map(
+        &walked.files,
+        |file| {
             if cancel.load(Ordering::Relaxed) {
                 return Err(OutputError::Cancelled);
             }
-            let outcome =
-                if is_excluded(layout, &file.path) || omitted.contains(file.path.as_path()) {
-                    None
-                } else {
-                    write_one(file, roles.get(file.path.as_path()), layout, out)?
-                };
-            let mut n = done.lock().unwrap_or_else(PoisonError::into_inner);
-            *n += 1;
-            observer.progress(Progress::Writing { done: *n, total });
-            Ok(outcome)
-        })
-        .collect::<Result<_, OutputError>>()?;
+            if is_excluded(layout, &file.path) || omitted.contains(file.path.as_path()) {
+                return Ok(None);
+            }
+            write_one(file, roles.get(file.path.as_path()), layout, out)
+        },
+        |done| observer.progress(Progress::Writing { done, total }),
+    )?;
 
     let mut written = Written::default();
     for (dest, file, owner_ok) in outcomes.into_iter().flatten() {
