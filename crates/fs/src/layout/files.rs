@@ -1,7 +1,8 @@
 //! Enumerating region triples.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::btree_map::Entry;
+use std::path::{Path, PathBuf};
 
 use super::{Dimension, LayoutError, read_dir_opt};
 use crate::region::{parse_external_name, parse_region_name};
@@ -28,25 +29,25 @@ pub fn list_dimension_files(dim: &Dimension) -> Result<DimensionFiles, LayoutErr
             let Some(name) = entry.file_name().into_string().ok() else {
                 continue;
             };
+            let region = parse_region_name(&name);
+            let external = parse_external_name(&name);
             let path = entry.path();
-            if let Some(pos) = parse_region_name(&name) {
-                if !path.is_file() {
-                    continue;
-                }
+            if (region.is_none() && external.is_none()) || !path.is_file() {
+                continue;
+            }
+            if let Some(pos) = region {
                 let triple = triples.entry(pos).or_insert_with(|| TripleFiles::new(pos));
-                insert_unique(&mut triple.files[kind], path)?;
-            } else if let Some(pos) = parse_external_name(&name) {
-                if !path.is_file() {
-                    continue;
+                match &mut triple.files[kind] {
+                    Some(first) => return Err(ambiguous(first, path)),
+                    slot => *slot = Some(path),
                 }
-                let map = &mut files.externals[kind];
-                if let Some(first) = map.get(&pos) {
-                    return Err(LayoutError::AmbiguousRegion {
-                        first: first.clone(),
-                        second: path,
-                    });
+            } else if let Some(pos) = external {
+                match files.externals[kind].entry(pos) {
+                    Entry::Occupied(first) => return Err(ambiguous(first.get(), path)),
+                    Entry::Vacant(slot) => {
+                        slot.insert(path);
+                    }
                 }
-                map.insert(pos, path);
             }
         }
     }
@@ -54,15 +55,11 @@ pub fn list_dimension_files(dim: &Dimension) -> Result<DimensionFiles, LayoutErr
     Ok(files)
 }
 
-fn insert_unique(slot: &mut Option<PathBuf>, path: PathBuf) -> Result<(), LayoutError> {
-    if let Some(first) = slot {
-        return Err(LayoutError::AmbiguousRegion {
-            first: first.clone(),
-            second: path,
-        });
+fn ambiguous(first: &Path, second: PathBuf) -> LayoutError {
+    LayoutError::AmbiguousRegion {
+        first: first.to_path_buf(),
+        second,
     }
-    *slot = Some(path);
-    Ok(())
 }
 
 #[cfg(test)]
