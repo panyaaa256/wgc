@@ -25,6 +25,7 @@ CI runs the following; run them locally before opening a pull request:
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p wgc-core --target thumbv7em-none-eabihf -- -D warnings   # no_std
 cargo nextest run --workspace        # or: cargo test --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo deny check
