@@ -13,7 +13,7 @@ use wgc::host::{GcHost, Locked, Runner, World};
 use wgc_core::report::LockStatus;
 
 use crate::layout::{self, Dimension, DimensionFiles, WorldFiles, WorldLayout};
-use crate::lock::{LockError, SessionLock, SessionLocks};
+use crate::lock::{self, LockError, SessionLock, SessionLocks};
 use crate::output::copy::{self, Written};
 use crate::output::record::{self, SourceState};
 use crate::output::{self, OutputError, io_err, verify};
@@ -109,7 +109,7 @@ impl World for FsWorld<'_> {
     }
 
     fn lock(&self) -> Result<SessionLocks, LockError> {
-        SessionLocks::try_acquire_all(self.layout)
+        SessionLocks::try_acquire_all(&self.layout.world_folders)
     }
 
     fn lock_status(error: &LockError) -> LockStatus {
@@ -131,14 +131,7 @@ impl GcHost for FsWorld<'_> {
     }
 
     fn lock_folders(&self) -> Result<Locked<SessionLock>, OutputError> {
-        let mut folders: Vec<PathBuf> = self
-            .layout
-            .world_folders
-            .iter()
-            .map(|f| fs::canonicalize(f).unwrap_or_else(|_| f.clone()))
-            .collect();
-        folders.sort();
-        folders.dedup();
+        let folders = lock::distinct_folders(&self.layout.world_folders);
         let mut locked = Locked {
             locks: Vec::new(),
             missing: false,

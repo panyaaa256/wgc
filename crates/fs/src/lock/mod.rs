@@ -11,8 +11,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
-use crate::layout::WorldLayout;
-
 pub use wgc_core::layout::LOCK_FILE;
 
 /// Why `session.lock` could not be locked.
@@ -120,6 +118,17 @@ impl SessionLock {
     }
 }
 
+/// `world_folders` canonicalized where possible, sorted, each directory once.
+pub(crate) fn distinct_folders(world_folders: &[PathBuf]) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = world_folders
+        .iter()
+        .map(|f| fs::canonicalize(f).unwrap_or_else(|_| f.clone()))
+        .collect();
+    folders.sort();
+    folders.dedup();
+    folders
+}
+
 /// Locks on every world folder of a layout.
 #[derive(Debug)]
 pub struct SessionLocks(Vec<SessionLock>);
@@ -127,15 +136,8 @@ pub struct SessionLocks(Vec<SessionLock>);
 impl SessionLocks {
     /// Locks all `world_folders` in order. Folders that resolve to the same
     /// directory are locked once. On failure, the locks taken so far are released.
-    pub fn try_acquire_all(layout: &WorldLayout) -> Result<SessionLocks, LockError> {
-        let mut folders: Vec<PathBuf> = layout
-            .world_folders
-            .iter()
-            .map(|f| fs::canonicalize(f).unwrap_or_else(|_| f.clone()))
-            .collect();
-        folders.sort();
-        folders.dedup();
-        folders
+    pub fn try_acquire_all(world_folders: &[PathBuf]) -> Result<SessionLocks, LockError> {
+        distinct_folders(world_folders)
             .iter()
             .map(|folder| SessionLock::try_acquire(folder))
             .collect::<Result<Vec<_>, _>>()
