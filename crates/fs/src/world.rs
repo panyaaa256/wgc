@@ -77,6 +77,7 @@ pub(crate) fn lock_status(error: &LockError) -> LockStatus {
 impl World for FsWorld<'_> {
     type Source = FsSource;
     type Error = PlanError;
+    type Files = WorldFiles;
     type Locks = SessionLocks;
     type LockError = LockError;
 
@@ -92,9 +93,15 @@ impl World for FsWorld<'_> {
         Ok(layout::list_dimension_files(dim)?)
     }
 
-    fn files(&self) -> Result<Vec<(PathBuf, u64)>, PlanError> {
-        let walked = layout::world_files(self.layout)?;
-        Ok(walked.files.into_iter().map(|f| (f.path, f.size)).collect())
+    fn files(&self) -> Result<WorldFiles, PlanError> {
+        Ok(layout::world_files(self.layout)?)
+    }
+
+    fn file_sizes<'a>(files: &'a WorldFiles) -> impl Iterator<Item = (&'a PathBuf, u64)>
+    where
+        PathBuf: 'a,
+    {
+        files.files.iter().map(|f| (&f.path, f.size))
     }
 
     fn error_path(&self, error: &PlanError) -> Option<PathBuf> {
@@ -121,7 +128,6 @@ impl GcHost for FsWorld<'_> {
     type Target = PathBuf;
     type Out = PathBuf;
     type FolderLock = SessionLock;
-    type Walked = WorldFiles;
     type State = SourceState;
     type Written = Written;
     type Failure = OutputError;
@@ -146,10 +152,8 @@ impl GcHost for FsWorld<'_> {
         Ok(locked)
     }
 
-    fn capture(&self) -> Result<(WorldFiles, SourceState), OutputError> {
-        let walked = layout::world_files(self.layout)?;
-        let state = SourceState::capture(self.layout, &walked)?;
-        Ok((walked, state))
+    fn capture(&self, files: &WorldFiles) -> Result<SourceState, OutputError> {
+        SourceState::capture(self.layout, files)
     }
 
     fn available_space(&self, out: &PathBuf) -> Result<u64, OutputError> {

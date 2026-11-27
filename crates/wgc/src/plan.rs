@@ -42,6 +42,19 @@ pub fn build_plan<W: World>(
     observer: ObserverOf<'_, W>,
     cancel: &AtomicBool,
 ) -> Result<Plan<PathOf<W>>, PlanError<W::Error>> {
+    let files = world.files()?;
+    build_plan_with(world, runner, options, &files, observer, cancel)
+}
+
+/// Like [`build_plan`], with the world's files already listed.
+pub fn build_plan_with<W: World>(
+    world: &W,
+    runner: &impl Runner,
+    options: PlanOptions,
+    files: &W::Files,
+    observer: ObserverOf<'_, W>,
+    cancel: &AtomicBool,
+) -> Result<Plan<PathOf<W>>, PlanError<W::Error>> {
     let layout = world.layout();
     let source = world.source();
     // Enumerate first so that progress has a total.
@@ -96,12 +109,11 @@ pub fn build_plan<W: World>(
         .iter()
         .map(|folder| source.join(folder, LOCK_FILE))
         .collect();
-    let files = world.files()?;
     let estimate = estimate(
         listed.iter().map(|(_, files)| files),
         &dimensions,
         &players.omitted,
-        files.iter().map(|(path, size)| (path, *size)),
+        W::file_sizes(files),
         &lock_files,
     );
     Ok(Plan {

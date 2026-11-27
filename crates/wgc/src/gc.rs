@@ -16,7 +16,7 @@ use wgc_core::versions::DV_SESSION_LOCK_OS;
 
 use crate::host::{GcHost, PathOf, Runner};
 use crate::observe::Warning;
-use crate::plan::{ObserverOf, PlanError, build_plan, trust_before_plan};
+use crate::plan::{ObserverOf, PlanError, build_plan_with, trust_before_plan};
 
 /// Options for [`run_gc`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,14 +143,16 @@ pub fn run_gc<H: GcHost>(
         observer.warn(Warning::PreLockVersion(v));
     }
 
-    // 4. Source state, under the lock.
-    let (walked, state) = host.capture()?;
+    // 4. Source files and their state, under the lock.
+    let files = host.files().map_err(H::Failure::from)?;
+    let state = host.capture(&files)?;
 
     // 5. Plan.
     let plan_options = PlanOptions {
         gc_dims: options.gc_dims.clone(),
     };
-    let plan = build_plan(host, runner, plan_options, observer, cancel).map_err(plan_error)?;
+    let plan = build_plan_with(host, runner, plan_options, &files, observer, cancel)
+        .map_err(plan_error)?;
 
     // 6. The same checks against the plan. They match step 3 unless a file
     // changed meanwhile, e.g. under a running game when L-1 was forced.
@@ -176,9 +178,9 @@ pub fn run_gc<H: GcHost>(
     host.create_output(&out)?;
     let result = (|| {
         let written = host
-            .write(&plan, &walked, &out, observer, cancel)
+            .write(&plan, &files, &out, observer, cancel)
             .map_err(|e| (Stage::Write, e))?;
-        host.verify(&plan, &walked, &written, &out, &state, observer, cancel)
+        host.verify(&plan, &files, &written, &out, &state, observer, cancel)
             .map_err(|e| (Stage::Verify, e))?;
         host.record(&out, &state, &plan, &forced)
             .map_err(|e| (Stage::Record, e))?;

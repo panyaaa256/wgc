@@ -69,6 +69,8 @@ pub trait World: Sync {
     type Source: WorldSource;
     /// Why the world's files could not be listed or read.
     type Error: From<<Self::Source as WorldSource>::Error> + Send;
+    /// Every file under the world folders, as listed at one moment.
+    type Files: Sync;
     /// Locks held on the world. Dropping them releases the world.
     type Locks;
     /// Why the world could not be locked.
@@ -84,8 +86,13 @@ pub trait World: Sync {
         dim: &Dimension<PathOf<Self>>,
     ) -> Result<DimensionFiles<PathOf<Self>>, Self::Error>;
 
-    /// Every file under the world folders, with its size.
-    fn files(&self) -> Result<Vec<(PathOf<Self>, u64)>, Self::Error>;
+    /// Lists every file under the world folders.
+    fn files(&self) -> Result<Self::Files, Self::Error>;
+
+    /// Each listed file with its size.
+    fn file_sizes<'a>(files: &'a Self::Files) -> impl Iterator<Item = (&'a PathOf<Self>, u64)>
+    where
+        PathOf<Self>: 'a;
 
     /// The file an error is about, if it names one.
     fn error_path(&self, error: &Self::Error) -> Option<PathOf<Self>>;
@@ -117,8 +124,7 @@ pub trait GcHost: World {
     type Out;
     /// A lock on one world folder.
     type FolderLock;
-    /// The source's files as they were when the output was planned.
-    type Walked;
+    /// The state of the source's files, to detect later changes.
     type State;
     type Written;
     /// Why a step failed. It may itself mean that the run was cancelled.
@@ -131,8 +137,8 @@ pub trait GcHost: World {
     /// reported in [`Locked::missing`]; any other failure is an error.
     fn lock_folders(&self) -> Result<Locked<Self::FolderLock>, Self::Failure>;
 
-    /// Lists the source's files and records their state.
-    fn capture(&self) -> Result<(Self::Walked, Self::State), Self::Failure>;
+    /// Records the state of the listed files.
+    fn capture(&self, files: &Self::Files) -> Result<Self::State, Self::Failure>;
 
     /// Free space where the output goes, in bytes.
     fn available_space(&self, out: &Self::Out) -> Result<u64, Self::Failure>;
@@ -144,7 +150,7 @@ pub trait GcHost: World {
     fn write(
         &self,
         plan: &Plan<PathOf<Self>>,
-        walked: &Self::Walked,
+        files: &Self::Files,
         out: &Self::Out,
         observer: &dyn Observer<Warning<PathOf<Self>, Self::LockError>>,
         cancel: &AtomicBool,
@@ -155,7 +161,7 @@ pub trait GcHost: World {
     fn verify(
         &self,
         plan: &Plan<PathOf<Self>>,
-        walked: &Self::Walked,
+        files: &Self::Files,
         written: &Self::Written,
         out: &Self::Out,
         state: &Self::State,
