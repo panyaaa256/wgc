@@ -11,9 +11,8 @@ use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt;
 
-use crate::types::{ChunkIndex, ChunkPos, FileKind, RegionPos};
+use crate::types::{ChunkIndex, ChunkPos, FileKind, RegionPos, text_id};
 
 pub use compression::{DecompressError, Decompressor, decompress};
 pub use write::{WriteError, write_region};
@@ -100,17 +99,7 @@ impl StructuralId {
     }
 }
 
-impl serde::Serialize for StructuralId {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
-}
-
-impl fmt::Display for StructuralId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+text_id!(StructuralId);
 
 /// A structural problem in one file of a region triple.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

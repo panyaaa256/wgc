@@ -341,17 +341,26 @@ impl GuardId {
     }
 }
 
-impl fmt::Display for GuardId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// Implements `Display` and `Serialize` for a user-facing ID through its
+/// `as_str`, so that it reads the same in text and in JSON.
+macro_rules! text_id {
+    ($ty:ty) => {
+        impl core::fmt::Display for $ty {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
 
-impl serde::Serialize for GuardId {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
+        impl serde::Serialize for $ty {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.serialize_str(self.as_str())
+            }
+        }
+    };
 }
+pub(crate) use text_id;
+
+text_id!(GuardId);
 
 impl FromStr for GuardId {
     type Err = GuardIdError;
