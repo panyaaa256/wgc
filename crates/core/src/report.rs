@@ -491,12 +491,15 @@ fn dimension_report<P>(
         if t.is_verbatim() {
             integrity.verbatim_triples.push([t.pos.x, t.pos.z]);
         }
-        // A structural issue always belongs to a file of its triple.
-        for (issue, file) in t
-            .issues
-            .iter()
-            .filter_map(|issue| Some((issue, t.file(issue.kind)?)))
-        {
+        for issue in &t.issues {
+            let file = t.file(issue.kind);
+            debug_assert!(
+                file.is_some(),
+                "a structural issue belongs to a file of its triple"
+            );
+            let Some(file) = file else {
+                continue;
+            };
             integrity.structural.push(StructuralJson {
                 path: rel(&file.path)?,
                 id: issue.id,
