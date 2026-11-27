@@ -66,14 +66,116 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
-    /// Whether `gc --out` would stop where `--force` can continue: a trust
-    /// check failed or could not be confirmed, or `session.lock` is missing (L-1).
+    /// Where `gc --out` would stop and `--force` can continue: trust checks
+    /// that failed or could not be confirmed, in check order, then L-1 when
+    /// `session.lock` is missing.
+    pub fn stops(&self) -> Vec<GuardId> {
+        let trust = self
+            .trust
+            .iter()
+            .filter(|t| matches!(t.status, TrustStatus::Fail | TrustStatus::Unknown))
+            .map(|t| t.id);
+        let lock = (self.lock == LockStatus::Missing).then_some(GuardId::L1);
+        trust.chain(lock).collect()
+    }
+
+    /// Whether `gc --out` would stop anywhere (see [`ScanReport::stops`]).
     pub fn has_stops(&self) -> bool {
-        self.lock == LockStatus::Missing
-            || self
-                .trust
-                .iter()
-                .any(|t| matches!(t.status, TrustStatus::Fail | TrustStatus::Unknown))
+        !self.stops().is_empty()
+    }
+
+    /// Chunks saved by an older game version than the world's, in all dimensions.
+    pub fn older_chunks(&self) -> u64 {
+        self.dimensions
+            .iter()
+            .map(|d| d.chunks.older_data_version)
+            .sum()
+    }
+}
+
+/// How many entries each detail list of a dimension has.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ListCounts {
+    /// Structural and content errors.
+    pub integrity: u64,
+    pub empty_files: u64,
+    /// Entity and POI entries without a chunk.
+    pub orphans: u64,
+    /// Boundary warnings: kept chunks with old terrain next to deleted ones.
+    pub seams: u64,
+}
+
+impl ListCounts {
+    pub fn any(self) -> bool {
+        self != Self::default()
+    }
+}
+
+impl core::ops::Add for ListCounts {
+    type Output = Self;
+
+    fn add(self, o: Self) -> Self {
+        ListCounts {
+            integrity: self.integrity + o.integrity,
+            empty_files: self.empty_files + o.empty_files,
+            orphans: self.orphans + o.orphans,
+            seams: self.seams + o.seams,
+        }
+    }
+}
+
+/// The figures of one dimension, or of several added up.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DimensionTotals {
+    /// Bytes of region, entities and POI files now.
+    pub before: u64,
+    pub chunks: u64,
+    /// Chunks GC deletes.
+    pub delete: u64,
+    /// Bytes of region, entities and POI files after GC.
+    pub after: u64,
+    pub lists: ListCounts,
+}
+
+impl DimensionTotals {
+    pub fn of(d: &DimensionReport) -> Self {
+        DimensionTotals {
+            before: d.size.region + d.size.entities + d.size.poi,
+            chunks: d.chunks.total,
+            delete: d.gc.delete,
+            after: d.gc.size_after.region + d.gc.size_after.entities + d.gc.size_after.poi,
+            lists: ListCounts {
+                integrity: (d.integrity.structural.len() + d.integrity.content.len()) as u64,
+                empty_files: d.empty_files.len() as u64,
+                orphans: d.orphans.entities + d.orphans.poi,
+                seams: d.boundary_warnings.len() as u64,
+            },
+        }
+    }
+
+    /// Bytes GC frees.
+    pub const fn saved(&self) -> u64 {
+        self.before.saturating_sub(self.after)
+    }
+}
+
+impl core::ops::Add for DimensionTotals {
+    type Output = Self;
+
+    fn add(self, o: Self) -> Self {
+        DimensionTotals {
+            before: self.before + o.before,
+            chunks: self.chunks + o.chunks,
+            delete: self.delete + o.delete,
+            after: self.after + o.after,
+            lists: self.lists + o.lists,
+        }
+    }
+}
+
+impl core::iter::Sum for DimensionTotals {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::default(), core::ops::Add::add)
     }
 }
 

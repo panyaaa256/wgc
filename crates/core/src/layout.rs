@@ -164,6 +164,15 @@ impl<P> DimensionFiles<P> {
 }
 
 impl<P> WorldLayout<P> {
+    /// The first of `ids` that is not a dimension of this world.
+    pub fn unknown_dimension<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a DimensionId>,
+    ) -> Option<&'a DimensionId> {
+        ids.into_iter()
+            .find(|id| !self.dimensions.iter().any(|d| d.id == **id))
+    }
+
     fn known_version(&self) -> Result<(), UnknownReason<P>> {
         match self.data_version {
             Some(v) if v > DV_MAX_KNOWN => Err(UnknownReason::UnknownVersion(v)),
@@ -297,4 +306,33 @@ pub fn paper_defaults_config<S: WorldSource>(
         .server_root
         .as_ref()
         .map(|root| source.join(root, "config/paper-world-defaults.yml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_dimension_is_the_first_id_the_world_lacks() {
+        let dim = |id| Dimension {
+            id,
+            dir: (),
+            world_folder: (),
+        };
+        let layout = WorldLayout {
+            root: (),
+            kind: LayoutKind::Vanilla,
+            base: None,
+            main_world_folder: (),
+            world_folders: Vec::new(),
+            server_root: None,
+            data_version: None,
+            level_spawn_mobs: RuleValue::Absent,
+            dimensions: vec![dim(DimensionId::overworld()), dim(DimensionId::the_end())],
+        };
+        let nether = DimensionId::the_nether();
+        let ids = [DimensionId::the_end(), nether.clone(), DimensionId::overworld()];
+        assert_eq!(layout.unknown_dimension(&ids), Some(&nether));
+        assert_eq!(layout.unknown_dimension(&ids[..1]), None);
+    }
 }

@@ -7,7 +7,7 @@ use wgc_fs::plan::PlanError;
 use wgc_fs::report::{DetailJson, Notice, ReasonJson, ReportError};
 use wgc_fs::types::{GuardId, Warning};
 
-use crate::ui::ListCounts;
+use wgc_fs::report::ListCounts;
 
 pub fn notice(n: Notice) -> &'static str {
     match n {

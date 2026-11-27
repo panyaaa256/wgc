@@ -10,11 +10,10 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use clap::Parser;
+use wgc_fs::Outcome;
 use wgc_fs::layout::{self, WorldLayout};
-use wgc_fs::output::{self, GcOptions, OutputError, VerifyError};
-use wgc_fs::plan::{PlanError, PlanOptions, build_plan};
-use wgc_fs::report::{self, LockStatus, ReportError};
-use wgc_fs::trust::check_trust;
+use wgc_fs::output::{self, GcOptions, VerifyError, VerifyJson};
+use wgc_fs::report::{self, ReportError};
 
 use args::{Cli, Command, GcArgs, ScanArgs, VerifyArgs};
 use ui::{SummaryKind, Terminal};
@@ -32,6 +31,19 @@ mod exit {
     /// The output failed verification, or is not ready to swap in.
     pub const VERIFY: u8 = 5;
     pub const INTERRUPTED: u8 = 130;
+
+    /// The exit code for how a command ended.
+    pub const fn code(outcome: wgc_fs::Outcome) -> u8 {
+        use wgc_fs::Outcome;
+        match outcome {
+            Outcome::Success => SUCCESS,
+            Outcome::Warnings => WARNINGS,
+            Outcome::Stopped => STOPPED,
+            Outcome::Failed => ERROR,
+            Outcome::NotReady => VERIFY,
+            Outcome::Interrupted => INTERRUPTED,
+        }
+    }
 }
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
@@ -97,24 +109,17 @@ fn print_json(value: &impl serde::Serialize, term: &Terminal) -> Result<(), u8> 
 fn detect(path: &std::path::Path, command: &str, term: &Terminal) -> Result<WorldLayout, u8> {
     layout::detect(path).map_err(|e| {
         term.error(&messages::layout(&e, command));
-        exit::ERROR
+        exit::code(e.outcome())
     })
 }
 
 fn report_error(e: &ReportError, command: &str, term: &Terminal) -> u8 {
     term.error(&messages::report(e, command));
-    match e {
-        ReportError::Plan(PlanError::Cancelled) => exit::INTERRUPTED,
-        _ => exit::ERROR,
-    }
+    exit::code(e.outcome())
 }
 
 fn finish(warned: bool, strict: bool) -> u8 {
-    if warned && strict {
-        exit::WARNINGS
-    } else {
-        exit::SUCCESS
-    }
+    exit::code(Outcome::finished(warned, strict))
 }
 
 /// A Ctrl-C that arrived after the core returned still ends the run with 130,
@@ -160,15 +165,12 @@ fn gc(a: &GcArgs, cli: &Cli, term: &Terminal) -> u8 {
         Ok(l) => l,
         Err(code) => return code,
     };
+    if let Some(missing) = layout.unknown_dimension(&a.dimensions) {
+        term.error(&messages::unknown_dimension(missing.as_str()));
+        return exit::USAGE;
+    }
     let gc_dims: Option<BTreeSet<_>> =
         (!a.dimensions.is_empty()).then(|| a.dimensions.iter().cloned().collect());
-    if let Some(dims) = &gc_dims {
-        let known: BTreeSet<_> = layout.dimensions.iter().map(|d| &d.id).collect();
-        if let Some(missing) = dims.iter().find(|d| !known.contains(d)) {
-            term.error(&messages::unknown_dimension(missing.as_str()));
-            return exit::USAGE;
-        }
-    }
     match &a.out {
         None => gc_estimate(a, cli, term, &layout, gc_dims),
         Some(out) => gc_output(a, cli, term, &layout, gc_dims, out),
@@ -182,15 +184,7 @@ fn gc_estimate(
     layout: &WorldLayout,
     gc_dims: Option<BTreeSet<wgc_fs::types::DimensionId>>,
 ) -> u8 {
-    let (lock, _held) = report::try_lock_for_report(layout, term);
-    let plan = match build_plan(layout, &PlanOptions { gc_dims }, term, &CANCEL) {
-        Ok(p) => p,
-        Err(e) => return report_error(&ReportError::Plan(e), "gc", term),
-    };
-    let trust = check_trust(&plan);
-    let result = report::scan_report(&plan, &trust, lock)
-        .and_then(|scan| report::gc_report(scan, None, &BTreeSet::new(), &plan));
-    let report = match result {
+    let report = match report::run_estimate(layout, gc_dims, term, &CANCEL) {
         Ok(r) => r,
         Err(e) => return report_error(&e, "gc", term),
     };
@@ -236,32 +230,10 @@ fn gc_output(
         Ok(o) => o,
         Err(e) => {
             term.error(&messages::output(&e));
-            return match e {
-                OutputError::OutputNotEmpty { .. }
-                | OutputError::InvalidOutputPath { .. }
-                | OutputError::OutputOverlapsSource { .. }
-                | OutputError::Stopped(_)
-                | OutputError::InsufficientSpace { .. } => exit::STOPPED,
-                OutputError::Lock(wgc_fs::lock::LockError::Io { .. }) => exit::ERROR,
-                OutputError::Lock(_) => exit::STOPPED,
-                OutputError::Verification(_) => exit::VERIFY,
-                OutputError::Cancelled => exit::INTERRUPTED,
-                OutputError::Layout(_) | OutputError::Plan(_) | OutputError::Io { .. } => {
-                    exit::ERROR
-                }
-            };
+            return exit::code(e.outcome());
         }
     };
-    // When the missing session.lock stop (L-1) was forced, the output folders were not locked.
-    let output_lock = if outcome.lock_skipped {
-        LockStatus::Missing
-    } else {
-        LockStatus::Acquired
-    };
-    let result = report::scan_report(&outcome.plan, &outcome.trust, output_lock).and_then(|scan| {
-        report::gc_report(scan, Some(&outcome.out), &outcome.forced, &outcome.plan)
-    });
-    let report = match result {
+    let report = match report::gc_output_report(&outcome) {
         Ok(r) => r,
         Err(e) => return report_error(&e, "gc", term),
     };
@@ -289,7 +261,7 @@ fn gc_output(
             &mut sink,
             layout.kind.as_str(),
             &layout.root,
-            &ui::layout_paths(layout),
+            &report::world_folder_names(layout),
             &outcome.out,
         );
     }
@@ -301,28 +273,11 @@ fn gc_output(
     finish(term.warnings() > 0, a.strict)
 }
 
-#[derive(serde::Serialize)]
-struct VerifyJson {
-    schema: &'static str,
-    result: &'static str,
-    source: Option<String>,
-    changed: Vec<String>,
-    forced: Vec<String>,
-}
-
 fn verify(a: &VerifyArgs, cli: &Cli, term: &Terminal) -> u8 {
     let result = output::verify(&a.out, a.source.as_deref());
     if let Some(code) = interrupted(term) {
         return code;
     }
-    let (name, code) = match &result {
-        Ok(_) => ("ready", exit::SUCCESS),
-        Err(VerifyError::Incomplete { .. }) => ("incomplete", exit::VERIFY),
-        Err(VerifyError::SourceMismatch { .. }) => ("source_mismatch", exit::VERIFY),
-        Err(VerifyError::Changed(_)) => ("changed", exit::VERIFY),
-        Err(VerifyError::InUse { .. }) => ("in_use", exit::VERIFY),
-        Err(VerifyError::Io { .. }) => ("error", exit::ERROR),
-    };
     match &result {
         Ok(ok) => {
             if let Some(mut sink) = summary_sink(a.json, cli.quiet) {
@@ -341,75 +296,14 @@ fn verify(a: &VerifyArgs, cli: &Cli, term: &Terminal) -> u8 {
         }
         Err(e) => term.error(&messages::verify(e)),
     }
-    if a.json {
-        let json = VerifyJson {
-            schema: "wgc.verify/1",
-            result: name,
-            source: result.as_ref().ok().map(|o| o.source.display().to_string()),
-            changed: match &result {
-                Err(VerifyError::Changed(c)) => c
-                    .iter()
-                    .map(|c| match c {
-                        output::ChangedFile::Added(p)
-                        | output::ChangedFile::Removed(p)
-                        | output::ChangedFile::Modified(p) => p.clone(),
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            },
-            forced: result
-                .as_ref()
-                .map(|o| o.forced.clone())
-                .unwrap_or_default(),
-        };
-        if let Err(c) = print_json(&json, term) {
-            return c;
-        }
+    if a.json
+        && let Err(code) = print_json(&VerifyJson::new(&result), term)
+    {
+        return code;
     }
-    code
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn json(v: &VerifyJson) -> String {
-        serde_json::to_string(v).unwrap()
-    }
-
-    #[test]
-    fn verify_json_golden() {
-        let ready = VerifyJson {
-            schema: "wgc.verify/1",
-            result: "ready",
-            source: Some("/abs/server".to_owned()),
-            changed: Vec::new(),
-            forced: vec!["T-1".to_owned(), "L-1".to_owned()],
-        };
-        assert_eq!(
-            json(&ready),
-            concat!(
-                r#"{"schema":"wgc.verify/1","result":"ready","source":"/abs/server","#,
-                r#""changed":[],"forced":["T-1","L-1"]}"#,
-            )
-        );
-
-        let changed = VerifyJson {
-            result: "changed",
-            source: None,
-            changed: vec![
-                "world/level.dat".to_owned(),
-                "world/region/r.0.0.mca".to_owned(),
-            ],
-            forced: Vec::new(),
-            ..ready
-        };
-        assert_eq!(
-            json(&changed),
-            concat!(
-                r#"{"schema":"wgc.verify/1","result":"changed","source":null,"#,
-                r#""changed":["world/level.dat","world/region/r.0.0.mca"],"forced":[]}"#,
-            )
-        );
-    }
+    exit::code(
+        result
+            .as_ref()
+            .map_or_else(VerifyError::outcome, |_| Outcome::Success),
+    )
 }

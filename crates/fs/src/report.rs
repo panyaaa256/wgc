@@ -8,11 +8,13 @@ use std::sync::atomic::AtomicBool;
 
 pub use wgc_core::report::*;
 
+use crate::Outcome;
 use crate::layout::WorldLayout;
 use crate::lock::SessionLocks;
+use crate::output::GcOutcome;
 use crate::plan::{Plan, PlanError};
 use crate::trust::TrustReport;
-use crate::types::{GuardId, Observer, Warning};
+use crate::types::{DimensionId, GuardId, Observer, Warning};
 use crate::world::{FsWorld, Rayon};
 
 /// Why a report could not be produced.
@@ -22,6 +24,16 @@ pub enum ReportError {
     NonUtf8Path(PathBuf),
     #[error(transparent)]
     Plan(#[from] PlanError),
+}
+
+impl ReportError {
+    /// How a report that ended with this error ended.
+    pub const fn outcome(&self) -> Outcome {
+        match self {
+            ReportError::Plan(PlanError::Cancelled) => Outcome::Interrupted,
+            _ => Outcome::Failed,
+        }
+    }
 }
 
 impl From<NonUtf8Path<PathBuf>> for ReportError {
@@ -55,6 +67,34 @@ impl From<wgc::scan::ReportError<PlanError, PathBuf>> for ReportError {
             wgc::scan::ReportError::NonUtf8Path(path) => ReportError::NonUtf8Path(path),
         }
     }
+}
+
+/// Runs `wgc gc` without `--out`: what GC would delete in `gc_dims` (all
+/// dimensions if `None`), with nothing written.
+pub fn run_estimate(
+    layout: &WorldLayout,
+    gc_dims: Option<BTreeSet<DimensionId>>,
+    observer: &dyn Observer<Warning>,
+    cancel: &AtomicBool,
+) -> Result<GcReport, ReportError> {
+    wgc::scan::run_estimate(&FsWorld::new(layout), &Rayon, gc_dims, observer, cancel)
+        .map_err(ReportError::from)
+}
+
+/// The `wgc gc` report of a finished `gc --out`.
+pub fn gc_output_report(outcome: &GcOutcome) -> Result<GcReport, ReportError> {
+    let scan = scan_report(&outcome.plan, &outcome.trust, outcome.lock_status())?;
+    gc_report(scan, Some(&outcome.out), &outcome.forced, &outcome.plan)
+}
+
+/// The world folders relative to the input path, for the steps that swap the
+/// output in. A folder that cannot be named so is given as it is.
+pub fn world_folder_names(layout: &WorldLayout) -> Vec<String> {
+    layout
+        .world_folders
+        .iter()
+        .map(|f| rel_path(&layout.root, f).unwrap_or_else(|_| f.display().to_string()))
+        .collect()
 }
 
 /// Builds the scan report for a plan made without `--dimension`.

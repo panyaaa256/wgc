@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use wgc_core::plan::{Plan, PlanOptions};
+use wgc_core::report::LockStatus;
 use wgc_core::trust::{TrustReport, check_trust};
 use wgc_core::types::{DimensionId, GuardId};
 use wgc_core::versions::DV_SESSION_LOCK_OS;
@@ -41,6 +42,18 @@ pub struct GcOutcome<P, O> {
     /// Whether some world folder was not locked because `session.lock` was
     /// missing and L-1 was forced.
     pub lock_skipped: bool,
+}
+
+impl<P, O> GcOutcome<P, O> {
+    /// The state of `session.lock` for the report: locked, unless L-1 was
+    /// forced and some world folder could not be locked.
+    pub const fn lock_status(&self) -> LockStatus {
+        if self.lock_skipped {
+            LockStatus::Missing
+        } else {
+            LockStatus::Acquired
+        }
+    }
 }
 
 /// Why `gc --out` stopped or failed.

@@ -11,5 +11,6 @@ extern crate alloc;
 pub mod gc;
 pub mod host;
 pub mod observe;
+pub mod outcome;
 pub mod plan;
 pub mod scan;

@@ -12,6 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::Outcome;
 use crate::nbt::NbtError;
 use crate::region::parse_region_name;
 use crate::types::{DimensionId, FileKind};
@@ -66,6 +67,11 @@ pub enum LayoutError {
 }
 
 impl LayoutError {
+    /// A world that cannot be recognized leaves the command unable to start.
+    pub const fn outcome(&self) -> Outcome {
+        Outcome::Failed
+    }
+
     pub(crate) fn io(path: &Path, source: io::Error) -> Self {
         LayoutError::Io {
             path: path.to_path_buf(),

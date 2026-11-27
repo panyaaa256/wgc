@@ -3,6 +3,7 @@
 //! This crate never writes to the terminal. Long-running operations report
 //! progress and warnings through a [`types::Observer`] instead.
 
+pub use wgc::outcome::Outcome;
 pub use wgc_core::{TOOL_VERSION, nbt, region, versions};
 
 pub mod layout;

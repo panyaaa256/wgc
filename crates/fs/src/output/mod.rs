@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicBool;
 
 use wgc::gc::GcError;
 
+use crate::Outcome;
 use crate::layout::{LayoutError, WorldLayout};
 use crate::lock::LockError;
 use crate::plan::PlanError;
@@ -21,7 +22,7 @@ use crate::types::{GuardId, Observer, Warning};
 use crate::world::{FsWorld, Rayon};
 
 pub use record::{ChangedFile, Complete, Failure, FailureItem, SourceState, SourceStateFile};
-pub use verify::{VerifyError, VerifyOutcome, verify};
+pub use verify::{VerifyError, VerifyJson, VerifyOutcome, verify};
 
 /// Name of the record folder in the output.
 pub const RECORD_DIR: &str = ".wgc";
@@ -87,6 +88,26 @@ impl From<PlanError> for OutputError {
         match e {
             PlanError::Cancelled => OutputError::Cancelled,
             other => OutputError::Plan(other),
+        }
+    }
+}
+
+impl OutputError {
+    /// How a `gc --out` that ended with this error ended.
+    pub const fn outcome(&self) -> Outcome {
+        match self {
+            OutputError::OutputNotEmpty { .. }
+            | OutputError::InvalidOutputPath { .. }
+            | OutputError::OutputOverlapsSource { .. }
+            | OutputError::Stopped(_)
+            | OutputError::InsufficientSpace { .. } => Outcome::Stopped,
+            OutputError::Lock(LockError::Io { .. }) => Outcome::Failed,
+            OutputError::Lock(_) => Outcome::Stopped,
+            OutputError::Verification(_) => Outcome::NotReady,
+            OutputError::Cancelled => Outcome::Interrupted,
+            OutputError::Layout(_) | OutputError::Plan(_) | OutputError::Io { .. } => {
+                Outcome::Failed
+            }
         }
     }
 }
