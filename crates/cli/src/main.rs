@@ -65,27 +65,22 @@ fn main() -> ExitCode {
         Command::Gc(a) => gc(a, &cli, &term),
         Command::Verify(a) => verify(a, &cli, &term),
     };
-    ExitCode::from(code)
+    ExitCode::from(code.unwrap_or_else(|code| code))
 }
 
-/// Where the human-readable summary goes: stdout, or stderr with `--json`, or nowhere with `--quiet`.
-fn summary_sink(json: bool, quiet: bool) -> Option<Box<dyn Write>> {
-    match (quiet, json) {
-        (true, _) => None,
-        (false, true) => Some(Box::new(std::io::stderr())),
-        (false, false) => Some(Box::new(std::io::stdout())),
+/// Where the human-readable summary goes and how to lay it out: stdout, or
+/// stderr with `--json`, or nowhere with `--quiet`.
+fn summary_output(json: bool, cli: &Cli) -> Option<(Box<dyn Write>, ui::SummaryFormat)> {
+    if cli.quiet {
+        return None;
     }
-}
-
-/// Colors, terminal width and verbosity for the stream [`summary_sink`] picks.
-fn sink_format(json: bool, cli: &Cli) -> ui::SummaryFormat {
-    let term = if json {
-        console::Term::stderr()
+    let (sink, term): (Box<dyn Write>, _) = if json {
+        (Box::new(std::io::stderr()), console::Term::stderr())
     } else {
-        console::Term::stdout()
+        (Box::new(std::io::stdout()), console::Term::stdout())
     };
     let tty = term.is_term();
-    ui::SummaryFormat {
+    let format = ui::SummaryFormat {
         style: ui::Style {
             color: ui::color_enabled(cli.no_color, tty),
         },
@@ -94,7 +89,8 @@ fn sink_format(json: bool, cli: &Cli) -> ui::SummaryFormat {
             .flatten()
             .map(|(_, cols)| usize::from(cols)),
         verbose: cli.verbose,
-    }
+    };
+    Some((sink, format))
 }
 
 fn print_json(value: &impl serde::Serialize, term: &Terminal) -> Result<(), u8> {
@@ -105,6 +101,15 @@ fn print_json(value: &impl serde::Serialize, term: &Terminal) -> Result<(), u8> 
             term.error(&format!("cannot write JSON: {e}"));
             exit::ERROR
         })
+}
+
+/// Prints `value` as JSON when `json` is set.
+fn maybe_json(json: bool, value: &impl serde::Serialize, term: &Terminal) -> Result<(), u8> {
+    if json {
+        print_json(value, term)
+    } else {
+        Ok(())
+    }
 }
 
 fn detect(path: &std::path::Path, command: &str, term: &Terminal) -> Result<WorldLayout, u8> {
@@ -125,49 +130,47 @@ fn finish(warned: bool, strict: bool) -> u8 {
 
 /// A Ctrl-C that arrived after the core returned still ends the run with 130,
 /// before any result is printed.
-fn interrupted(term: &Terminal) -> Option<u8> {
-    CANCEL.load(Ordering::SeqCst).then(|| {
+fn check_interrupted(term: &Terminal) -> Result<(), u8> {
+    if CANCEL.load(Ordering::SeqCst) {
         term.error(messages::INTERRUPTED);
-        exit::INTERRUPTED
-    })
+        return Err(exit::INTERRUPTED);
+    }
+    Ok(())
 }
 
-fn scan(a: &ScanArgs, cli: &Cli, term: &Terminal) -> u8 {
-    let layout = match detect(&a.path, "scan", term) {
-        Ok(l) => l,
-        Err(code) => return code,
-    };
-    let report = match wgc::scan::run_scan(&FsWorld::new(&layout), &Rayon, term, &CANCEL)
-        .map_err(ReportError::from)
-    {
-        Ok(r) => r,
-        Err(e) => return report_error(&e, "scan", term),
-    };
-    if let Some(code) = interrupted(term) {
-        return code;
-    }
-    if let Some(mut out) = summary_sink(a.json, cli.quiet) {
-        let _ = ui::summary(
-            &mut out,
-            &report,
-            &layout.root,
-            SummaryKind::Scan,
-            sink_format(a.json, cli),
-        );
-    }
-    if a.json
-        && let Err(code) = print_json(&report, term)
-    {
-        return code;
-    }
-    finish(term.warnings() > 0 || report.has_stops(), a.strict)
+/// The lines that end a finished `gc --out` or `wgc verify`: the result, the
+/// checks ignored with `--force`, and how to swap the output in.
+struct Finished<'a> {
+    headline: String,
+    forced: &'a [String],
+    layout_kind: &'a str,
+    source: &'a std::path::Path,
+    world_folders: &'a [String],
+    out: &'a std::path::Path,
 }
 
-fn gc(a: &GcArgs, cli: &Cli, term: &Terminal) -> u8 {
-    let layout = match detect(&a.path, "gc", term) {
-        Ok(l) => l,
-        Err(code) => return code,
-    };
+fn print_finished(sink: &mut dyn Write, style: ui::Style, f: &Finished<'_>) {
+    let _ = writeln!(sink, "{}", f.headline);
+    if !f.forced.is_empty() {
+        let _ = writeln!(sink, "{}", style.yellow(&messages::forced_output(f.forced)));
+    }
+    let _ = ui::swap_steps(sink, f.layout_kind, f.source, f.world_folders, f.out);
+}
+
+fn scan(a: &ScanArgs, cli: &Cli, term: &Terminal) -> Result<u8, u8> {
+    let layout = detect(&a.path, "scan", term)?;
+    let report = wgc::scan::run_scan(&FsWorld::new(&layout), &Rayon, term, &CANCEL)
+        .map_err(|e| report_error(&ReportError::from(e), "scan", term))?;
+    check_interrupted(term)?;
+    if let Some((mut out, format)) = summary_output(a.json, cli) {
+        let _ = ui::summary(&mut out, &report, &layout.root, SummaryKind::Scan, format);
+    }
+    maybe_json(a.json, &report, term)?;
+    Ok(finish(term.warnings() > 0 || report.has_stops(), a.strict))
+}
+
+fn gc(a: &GcArgs, cli: &Cli, term: &Terminal) -> Result<u8, u8> {
+    let layout = detect(&a.path, "gc", term)?;
     let gc_dims: Option<BTreeSet<_>> =
         (!a.dimensions.is_empty()).then(|| a.dimensions.iter().cloned().collect());
     if let Some(missing) = gc_dims
@@ -175,7 +178,7 @@ fn gc(a: &GcArgs, cli: &Cli, term: &Terminal) -> u8 {
         .and_then(|dims| layout.unknown_dimension(dims))
     {
         term.error(&messages::unknown_dimension(missing.as_str()));
-        return exit::USAGE;
+        return Err(exit::USAGE);
     }
     match &a.out {
         None => gc_estimate(a, cli, term, &layout, gc_dims),
@@ -189,33 +192,21 @@ fn gc_estimate(
     term: &Terminal,
     layout: &WorldLayout,
     gc_dims: Option<BTreeSet<wgc_fs::types::DimensionId>>,
-) -> u8 {
+) -> Result<u8, u8> {
     let world = FsWorld::new(layout);
-    let report = match wgc::scan::run_estimate(&world, &Rayon, gc_dims, term, &CANCEL)
-        .map_err(ReportError::from)
-    {
-        Ok(r) => r,
-        Err(e) => return report_error(&e, "gc", term),
-    };
-    if let Some(code) = interrupted(term) {
-        return code;
-    }
-    if let Some(mut out) = summary_sink(a.json, cli.quiet) {
-        let _ = ui::summary(
-            &mut out,
-            &report.scan,
-            &layout.root,
-            SummaryKind::Estimate,
-            sink_format(a.json, cli),
-        );
+    let report = wgc::scan::run_estimate(&world, &Rayon, gc_dims, term, &CANCEL)
+        .map_err(|e| report_error(&ReportError::from(e), "gc", term))?;
+    check_interrupted(term)?;
+    if let Some((mut out, format)) = summary_output(a.json, cli) {
+        let kind = SummaryKind::Estimate;
+        let _ = ui::summary(&mut out, &report.scan, &layout.root, kind, format);
         let _ = writeln!(out, "{}", messages::NOTHING_WRITTEN);
     }
-    if a.json
-        && let Err(code) = print_json(&report, term)
-    {
-        return code;
-    }
-    finish(term.warnings() > 0 || report.scan.has_stops(), a.strict)
+    maybe_json(a.json, &report, term)?;
+    Ok(finish(
+        term.warnings() > 0 || report.scan.has_stops(),
+        a.strict,
+    ))
 }
 
 fn gc_output(
@@ -225,7 +216,7 @@ fn gc_output(
     layout: &WorldLayout,
     gc_dims: Option<BTreeSet<wgc_fs::types::DimensionId>>,
     out: &std::path::Path,
-) -> u8 {
+) -> Result<u8, u8> {
     let options = GcOptions {
         out: out.to_path_buf(),
         gc_dims,
@@ -236,85 +227,55 @@ fn gc_output(
             .unwrap_or_default(),
     };
     let world = FsWorld::new(layout);
-    let outcome =
-        match wgc::gc::run_gc(&world, &Rayon, &options, term, &CANCEL).map_err(OutputError::from) {
-            Ok(o) => o,
-            Err(e) => {
-                term.error(&messages::output(&e));
-                return exit::code(e.outcome());
-            }
-        };
-    let report = match report::gc_output_report(&outcome) {
-        Ok(r) => r,
-        Err(e) => return report_error(&e, "gc", term),
-    };
-    if let Some(mut sink) = summary_sink(a.json, cli.quiet) {
-        let format = sink_format(a.json, cli);
+    let outcome = wgc::gc::run_gc(&world, &Rayon, &options, term, &CANCEL)
+        .map_err(OutputError::from)
+        .map_err(|e| {
+            term.error(&messages::output(&e));
+            exit::code(e.outcome())
+        })?;
+    let report = report::gc_output_report(&outcome).map_err(|e| report_error(&e, "gc", term))?;
+    if let Some((mut sink, format)) = summary_output(a.json, cli) {
         let style = format.style;
-        let _ = ui::summary(
-            &mut sink,
-            &report.scan,
-            &layout.root,
-            SummaryKind::Output,
-            format,
-        );
-        let _ = writeln!(
-            sink,
-            "{} {}",
-            style.green(messages::DONE),
-            outcome.out.display()
-        );
-        if !outcome.forced.is_empty() {
-            let ids: Vec<String> = outcome.forced.iter().map(ToString::to_string).collect();
-            let _ = writeln!(sink, "{}", style.yellow(&messages::forced_output(&ids)));
-        }
-        let _ = ui::swap_steps(
-            &mut sink,
-            layout.kind.as_str(),
-            &layout.root,
-            &report::world_folder_names(layout),
-            &outcome.out,
-        );
+        let kind = SummaryKind::Output;
+        let _ = ui::summary(&mut sink, &report.scan, &layout.root, kind, format);
+        let forced: Vec<String> = outcome.forced.iter().map(ToString::to_string).collect();
+        let finished = Finished {
+            headline: format!("{} {}", style.green(messages::DONE), outcome.out.display()),
+            forced: &forced,
+            layout_kind: layout.kind.as_str(),
+            source: &layout.root,
+            world_folders: &report::world_folder_names(layout),
+            out: &outcome.out,
+        };
+        print_finished(&mut sink, style, &finished);
     }
-    if a.json
-        && let Err(code) = print_json(&report, term)
-    {
-        return code;
-    }
-    finish(term.warnings() > 0, a.strict)
+    maybe_json(a.json, &report, term)?;
+    Ok(finish(term.warnings() > 0, a.strict))
 }
 
-fn verify(a: &VerifyArgs, cli: &Cli, term: &Terminal) -> u8 {
+fn verify(a: &VerifyArgs, cli: &Cli, term: &Terminal) -> Result<u8, u8> {
     let result = output::verify(&a.out, a.source.as_deref());
-    if let Some(code) = interrupted(term) {
-        return code;
-    }
+    check_interrupted(term)?;
     match &result {
         Ok(ok) => {
-            if let Some(mut sink) = summary_sink(a.json, cli.quiet) {
-                let style = sink_format(a.json, cli).style;
-                let _ = writeln!(sink, "{}", style.green(messages::READY));
-                if !ok.forced.is_empty() {
-                    let _ = writeln!(
-                        sink,
-                        "{}",
-                        style.yellow(&messages::forced_output(&ok.forced))
-                    );
-                }
-                let _ =
-                    ui::swap_steps(&mut sink, &ok.layout, &ok.source, &ok.world_folders, &a.out);
+            if let Some((mut sink, format)) = summary_output(a.json, cli) {
+                let finished = Finished {
+                    headline: format.style.green(messages::READY),
+                    forced: &ok.forced,
+                    layout_kind: &ok.layout,
+                    source: &ok.source,
+                    world_folders: &ok.world_folders,
+                    out: &a.out,
+                };
+                print_finished(&mut sink, format.style, &finished);
             }
         }
         Err(e) => term.error(&messages::verify(e)),
     }
-    if a.json
-        && let Err(code) = print_json(&VerifyJson::new(&result), term)
-    {
-        return code;
-    }
-    exit::code(
+    maybe_json(a.json, &VerifyJson::new(&result), term)?;
+    Ok(exit::code(
         result
             .as_ref()
             .map_or_else(VerifyError::outcome, |_| Outcome::Success),
-    )
+    ))
 }
